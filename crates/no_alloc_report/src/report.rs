@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Frame {
     /// `def_path_str` of the instance at this frame.
     pub def_path: String,
-    /// Rendered span, e.g. `src/lib.rs:12:5`. `None` before M5 wires up spans.
+    /// Rendered span, e.g. `src/lib.rs:12:5`; tests may normalize it to `None`.
     pub span: Option<String>,
 }
 
@@ -35,13 +35,51 @@ pub struct RootVerdict {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub roots: Vec<RootVerdict>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportFragment {
+    pub report: Report,
+    pub matched_root_specs: Vec<String>,
 }
 
 impl Report {
     pub fn is_success(&self) -> bool {
-        self.roots
+        self.selection_errors.is_empty()
+            && self
+                .roots
+                .iter()
+                .all(|r| matches!(r.verdict, Verdict::Pass | Verdict::NotInstantiated))
+    }
+
+    pub fn merge(reports: impl IntoIterator<Item = Self>) -> Self {
+        let mut merged = Self::default();
+        for report in reports {
+            merged.roots.extend(report.roots);
+            merged.selection_errors.extend(report.selection_errors);
+        }
+        merged.roots.sort_by(|a, b| {
+            (&a.root, &a.instance, format!("{:?}", a.verdict)).cmp(&(
+                &b.root,
+                &b.instance,
+                format!("{:?}", b.verdict),
+            ))
+        });
+        merged.roots.dedup();
+        let instantiated: std::collections::HashSet<_> = merged
+            .roots
             .iter()
-            .all(|r| matches!(r.verdict, Verdict::Pass | Verdict::NotInstantiated))
+            .filter(|root| !matches!(root.verdict, Verdict::NotInstantiated))
+            .map(|root| root.root.clone())
+            .collect();
+        merged.roots.retain(|root| {
+            !matches!(root.verdict, Verdict::NotInstantiated) || !instantiated.contains(&root.root)
+        });
+        merged.selection_errors.sort();
+        merged.selection_errors.dedup();
+        merged
     }
 
     /// Writes `target/no-alloc/report.json` for the test harness (and
@@ -50,8 +88,22 @@ impl Report {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = std::fs::File::create(path)?;
-        serde_json::to_writer_pretty(file, self).map_err(std::io::Error::other)
+        let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+        let file = std::fs::File::create(&temporary)?;
+        serde_json::to_writer_pretty(file, self).map_err(std::io::Error::other)?;
+        std::fs::rename(temporary, path)
+    }
+}
+
+impl ReportFragment {
+    pub fn write_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+        let file = std::fs::File::create(&temporary)?;
+        serde_json::to_writer(file, self).map_err(std::io::Error::other)?;
+        std::fs::rename(temporary, path)
     }
 }
 
@@ -74,6 +126,7 @@ mod tests {
                     verdict: Verdict::NotInstantiated,
                 },
             ],
+            selection_errors: vec![],
         };
         assert!(report.is_success());
     }
@@ -86,6 +139,7 @@ mod tests {
                 instance: "a".into(),
                 verdict: Verdict::Violation { chain: vec![] },
             }],
+            selection_errors: vec![],
         };
         assert!(!report.is_success());
     }
@@ -98,6 +152,7 @@ mod tests {
                 instance: "a".into(),
                 verdict: Verdict::Pass,
             }],
+            selection_errors: vec![],
         };
         let path = std::env::temp_dir().join(format!(
             "no_alloc_report_test_{}_{}.json",
@@ -125,10 +180,56 @@ mod tests {
                     reason: "dyn dispatch".into(),
                 },
             }],
+            selection_errors: vec![],
         };
         let json = serde_json::to_string(&report).unwrap();
         let back: Report = serde_json::from_str(&json).unwrap();
         assert_eq!(report.roots.len(), back.roots.len());
         assert!(!back.is_success());
+    }
+
+    #[test]
+    fn merge_is_sorted_and_deduplicated() {
+        let root = RootVerdict {
+            root: "z".into(),
+            instance: "z".into(),
+            verdict: Verdict::Pass,
+        };
+        let merged = Report::merge([
+            Report {
+                roots: vec![root.clone()],
+                selection_errors: vec!["b".into()],
+            },
+            Report {
+                roots: vec![root],
+                selection_errors: vec!["a".into(), "b".into()],
+            },
+        ]);
+        assert_eq!(merged.roots.len(), 1);
+        assert_eq!(merged.selection_errors, ["a", "b"]);
+    }
+
+    #[test]
+    fn concrete_instance_supersedes_not_instantiated_fragment() {
+        let merged = Report::merge([
+            Report {
+                roots: vec![RootVerdict {
+                    root: "dependency::root".into(),
+                    instance: "root".into(),
+                    verdict: Verdict::NotInstantiated,
+                }],
+                selection_errors: vec![],
+            },
+            Report {
+                roots: vec![RootVerdict {
+                    root: "dependency::root".into(),
+                    instance: "dependency::root::<u32>".into(),
+                    verdict: Verdict::Pass,
+                }],
+                selection_errors: vec![],
+            },
+        ]);
+        assert_eq!(merged.roots.len(), 1);
+        assert_eq!(merged.roots[0].instance, "dependency::root::<u32>");
     }
 }

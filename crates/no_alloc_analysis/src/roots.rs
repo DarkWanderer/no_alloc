@@ -1,18 +1,12 @@
-//! Root collection via the `no_alloc_tool::root` tool attribute (see
-//! ADR 0002). `get_attrs_by_path` dispatches to HIR for local `DefId`s and
-//! to `attrs_for_def`'s `separate_provide_extern` provider for foreign
-//! ones, so the same call answers both "what are this crate's roots" and
-//! the M2 cross-crate-metadata probe below.
+//! Root discovery on the complete monomorphized instance graph.
 
 use no_alloc_report::parse_root_spec;
-use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::DefId;
 use rustc_middle::mono::MonoItem;
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_span::Symbol;
 use std::collections::HashSet;
-use std::env;
-use tracing::info;
 
 fn root_attr_path() -> [Symbol; 2] {
     [Symbol::intern("no_alloc_tool"), Symbol::intern("root")]
@@ -24,91 +18,125 @@ pub fn is_root(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         .is_some()
 }
 
-/// Local defs in this crate carrying `#[no_alloc_tool::root]`.
-pub fn local_roots(tcx: TyCtxt<'_>) -> Vec<LocalDefId> {
-    tcx.iter_local_def_id()
-        .filter(|&def_id| is_root(tcx, def_id.to_def_id()))
-        .collect()
-}
-
-/// `NO_ALLOC_ROOTS` fallback: comma-separated `def_path_str`s, matched
-/// exactly (never a prefix/substring — see `no_alloc_report::parse_root_spec`).
-/// Unblocks third-party code the attribute can't reach.
-pub fn env_roots(tcx: TyCtxt<'_>) -> Vec<LocalDefId> {
-    let Ok(spec) = env::var("NO_ALLOC_ROOTS") else {
-        return Vec::new();
-    };
-    let wanted: HashSet<String> = parse_root_spec(&spec).into_iter().collect();
-    if wanted.is_empty() {
-        return Vec::new();
+pub fn root_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    let path = tcx.def_path_str(def_id);
+    if def_id.is_local() {
+        format!(
+            "{}::{path}",
+            tcx.crate_name(rustc_span::def_id::LOCAL_CRATE)
+        )
+    } else {
+        path
     }
-    tcx.iter_local_def_id()
-        .filter(|&def_id| wanted.contains(&tcx.def_path_str(def_id.to_def_id())))
-        .collect()
 }
 
-pub enum RootInstances<'tcx> {
-    Instances(Vec<Instance<'tcx>>),
-    /// A generic root with no instantiation in this crate — info, not a
-    /// failure: there's no MIR to walk for a signature no one called.
-    NotInstantiated,
+fn record_matches(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    requested: &HashSet<String>,
+    matched: &mut HashSet<String>,
+) -> bool {
+    let raw = tcx.def_path_str(def_id);
+    let canonical = root_path(tcx, def_id);
+    let mut selected = false;
+    for candidate in [raw, canonical] {
+        if requested.contains(&candidate) {
+            matched.insert(candidate);
+            selected = true;
+        }
+    }
+    selected
 }
 
-/// A root `DefId`'s instances, mono-site: a generic root gets one verdict
-/// per instantiation actually present in this crate's mono graph (the case
-/// that justifies mono-site analysis at all — two instantiations of the
-/// same root can have different verdicts). A local non-generic root that
-/// was never called still gets seeded via `Instance::mono` so it's checked
-/// rather than silently skipped.
-pub fn instances_for_root<'tcx>(tcx: TyCtxt<'tcx>, root: DefId) -> RootInstances<'tcx> {
+#[derive(Clone, Copy)]
+pub enum DiscoveredRoot<'tcx> {
+    Instance {
+        root: DefId,
+        instance: Instance<'tcx>,
+    },
+    NotInstantiated {
+        root: DefId,
+    },
+}
+
+pub struct Discovery<'tcx> {
+    pub roots: Vec<DiscoveredRoot<'tcx>>,
+    pub matched_root_specs: Vec<String>,
+    pub selection_errors: Vec<String>,
+}
+
+pub fn discover<'tcx>(tcx: TyCtxt<'tcx>) -> Discovery<'tcx> {
+    let requested: HashSet<String> = std::env::var("NO_ALLOC_ROOTS")
+        .ok()
+        .map(|value| parse_root_spec(&value).into_iter().collect())
+        .unwrap_or_default();
+    let mut matched = HashSet::new();
+    let mut selection_errors = Vec::new();
+    let mut roots = Vec::new();
+    let mut seen_instances = HashSet::new();
+    let mut instantiated_defs = HashSet::new();
+
     let partitions = tcx.collect_and_partition_mono_items(());
-    let found: Vec<Instance<'tcx>> = partitions
+    for item in partitions
         .codegen_units
         .iter()
         .flat_map(|cgu| cgu.items().keys())
-        .filter_map(|item| match item {
-            MonoItem::Fn(instance) if instance.def_id() == root => Some(*instance),
-            _ => None,
-        })
-        .collect();
-
-    if !found.is_empty() {
-        return RootInstances::Instances(found);
+    {
+        let MonoItem::Fn(instance) = item else {
+            continue;
+        };
+        let def_id = instance.def_id();
+        let selected = record_matches(tcx, def_id, &requested, &mut matched);
+        if (selected || is_root(tcx, def_id)) && seen_instances.insert(*instance) {
+            instantiated_defs.insert(def_id);
+            roots.push(DiscoveredRoot::Instance {
+                root: def_id,
+                instance: *instance,
+            });
+        }
     }
 
-    if tcx.generics_of(root).requires_monomorphization(tcx) {
-        RootInstances::NotInstantiated
-    } else {
-        RootInstances::Instances(vec![Instance::mono(tcx, root)])
-    }
-}
-
-/// M2 probe: does the root attribute survive into a *dependency* crate's
-/// metadata, i.e. can this crate see roots marked in crates it depends on
-/// without the sidecar index? Walks each external crate's root module
-/// (one level deep — sufficient for the M2 toy fixture) and logs any
-/// `DefKind::Fn` child carrying the attribute.
-pub fn probe_foreign_roots(tcx: TyCtxt<'_>) -> usize {
-    let mut found = 0usize;
-    for &cnum in tcx.crates(()) {
-        let root = cnum.as_def_id();
-        for child in tcx.module_children(root) {
-            let Res::Def(DefKind::Fn, def_id) = child.res else {
-                continue;
-            };
-            if is_root(tcx, def_id) {
-                found += 1;
-                info!(
-                    crate_name = %tcx.crate_name(cnum),
-                    def_path = %tcx.def_path_str(def_id),
-                    "foreign root attribute visible via cross-crate metadata"
-                );
+    // Mono collection cannot contain uncalled local functions. Seed those
+    // explicitly, while preserving NotInstantiated for generic definitions.
+    for local in tcx.iter_local_def_id() {
+        let def_id = local.to_def_id();
+        let path = root_path(tcx, def_id);
+        let selected = record_matches(tcx, def_id, &requested, &mut matched);
+        if selected && !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+            selection_errors.push(format!("requested root `{path}` is not a function"));
+            continue;
+        }
+        if !(selected || is_root(tcx, def_id)) || instantiated_defs.contains(&def_id) {
+            continue;
+        }
+        if tcx.generics_of(def_id).requires_monomorphization(tcx) {
+            roots.push(DiscoveredRoot::NotInstantiated { root: def_id });
+        } else {
+            let instance = Instance::mono(tcx, def_id);
+            if seen_instances.insert(instance) {
+                roots.push(DiscoveredRoot::Instance {
+                    root: def_id,
+                    instance,
+                });
             }
         }
     }
-    info!(
-        foreign_roots_found = found,
-        "cross-crate root attribute probe complete"
-    );
-    found
+
+    let mut matched_root_specs: Vec<_> = matched.into_iter().collect();
+    matched_root_specs.sort();
+    selection_errors.sort();
+    roots.sort_by_key(|root| match root {
+        DiscoveredRoot::Instance { root, instance } => {
+            (root_path(tcx, *root), instance.to_string())
+        }
+        DiscoveredRoot::NotInstantiated { root } => {
+            let path = root_path(tcx, *root);
+            (path.clone(), path)
+        }
+    });
+    Discovery {
+        roots,
+        matched_root_specs,
+        selection_errors,
+    }
 }

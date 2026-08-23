@@ -1,6 +1,6 @@
 use std::arch::asm;
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root() -> i32 {
     let x: i32;
     unsafe {

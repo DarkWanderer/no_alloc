@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "recursive_pass::root",
       "instance": "root",
       "verdict": {
         "kind": "pass"

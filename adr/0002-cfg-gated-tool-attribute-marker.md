@@ -14,7 +14,7 @@ and can use unstable features freely.
 
 ## Decision
 
-`#[no_alloc::no_alloc]` is a proc-macro attribute that expands to the
+`#[no_alloc_check::no_alloc]` is a proc-macro attribute that expands to the
 annotated item unchanged, with one attribute prepended:
 
 ```rust
@@ -32,9 +32,7 @@ annotated item unchanged, with one attribute prepended:
   attribute queries.
 
 The tool namespace is `no_alloc_tool`, deliberately distinct from the crate
-name `no_alloc` — a tool namespace matching the crate name would make
-`no_alloc::no_alloc` ambiguous between the tool-attribute namespace and the
-proc-macro path.
+public crate name `no_alloc_check`.
 
 ## Consequences
 
@@ -56,14 +54,9 @@ proc-macro path.
   `TyCtxt::get_attrs_by_path` found the attribute on a foreign `DefId` via
   its `attrs_for_def` `separate_provide_extern` provider. See
   `docs/design.md` for the fixture and log output.
-- Consequence: the sidecar root index (see `docs/design.md`) is a **belt**,
-  not the mechanism — direct cross-crate attribute reading already works.
-  It is kept anyway per the original design (fallback for e.g. non-`Fn`
-  targets or future attribute-encoding changes), but root collection is not
-  blocked on it.
-- `NO_ALLOC_ROOTS` env var and the sidecar index both exist as fallbacks
-  independent of whether the attribute plumbing works, so root-collection
-  work is not blocked on this ADR's mechanism being fully proven.
+- Direct cross-crate attribute reading is the discovery mechanism; no sidecar
+  root index is maintained. `NO_ALLOC_ROOTS` remains the explicit fallback for
+  code users cannot annotate. See ADR 0004.
 
 ## Alternatives considered
 

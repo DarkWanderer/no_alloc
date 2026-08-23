@@ -1,0 +1,11 @@
+{
+  "roots": [
+    {
+      "root": "terminate_unwind::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

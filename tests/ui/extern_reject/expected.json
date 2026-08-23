@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "extern_reject::root",
       "instance": "root",
       "verdict": {
         "kind": "rejected",

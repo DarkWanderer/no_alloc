@@ -1,0 +1,18 @@
+{
+  "roots": [
+    {
+      "root": "multi_a::root_a",
+      "instance": "root_a",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "multi_b::root_b",
+      "instance": "root_b",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

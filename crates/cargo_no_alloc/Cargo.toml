@@ -1,16 +1,31 @@
 [package]
-name = "cargo_no_alloc"
+name = "cargo-no-alloc"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "cargo-no-alloc: sets up env for the driver and shells out to cargo build/test."
+readme = "../../README.md"
+keywords = ["allocation", "realtime", "static-analysis", "cargo-subcommand"]
+categories = ["development-tools::cargo-plugins", "development-tools"]
+build = "build.rs"
 
 [[bin]]
 name = "cargo-no-alloc"
 path = "src/main.rs"
 
+[[bin]]
+name = "no-alloc-driver"
+path = "src/bin/no-alloc-driver.rs"
+
 [dependencies]
 anyhow = { workspace = true }
+fs2 = { workspace = true }
+no_alloc_analysis = { workspace = true }
+no_alloc_report = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }

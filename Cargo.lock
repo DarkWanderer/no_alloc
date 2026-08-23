@@ -42,10 +42,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "cargo_no_alloc"
+name = "cargo-no-alloc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fs2",
+ "no_alloc_analysis",
+ "no_alloc_report",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -194,6 +198,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -327,31 +341,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "no_alloc"
-version = "0.1.0"
-dependencies = [
- "no_alloc_macros",
-]
-
-[[package]]
 name = "no_alloc_analysis"
 version = "0.1.0"
 dependencies = [
  "no_alloc_report",
- "serde",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
-name = "no_alloc_driver"
+name = "no_alloc_check"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "no_alloc_analysis",
- "no_alloc_report",
- "tracing",
- "tracing-subscriber",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "trybuild",
 ]
 
 [[package]]
@@ -361,16 +364,6 @@ dependencies = [
  "criterion",
  "no_alloc_report",
  "serde_json",
-]
-
-[[package]]
-name = "no_alloc_macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "trybuild",
 ]
 
 [[package]]
@@ -849,6 +842,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -856,6 +865,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-link"

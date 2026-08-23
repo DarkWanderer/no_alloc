@@ -1366,7 +1366,7 @@ fn n_2_33(x: i32) -> i32 { n_3_330(x) + n_3_331(x) + n_3_332(x) + n_3_333(x) }
 fn n_1_3(x: i32) -> i32 { n_2_30(x) + n_2_31(x) + n_2_32(x) + n_2_33(x) }
 fn n_0_(x: i32) -> i32 { n_1_0(x) + n_1_1(x) + n_1_2(x) + n_1_3(x) }
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root() -> i32 {
     n_0_(41)
 }

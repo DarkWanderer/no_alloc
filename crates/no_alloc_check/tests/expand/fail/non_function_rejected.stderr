@@ -1,0 +1,5 @@
+error: #[no_alloc] can only be applied to functions and methods
+ --> tests/expand/fail/non_function_rejected.rs:2:1
+  |
+2 | struct NotAFunction;
+  | ^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: #[no_alloc] does not yet support async functions
+ --> tests/expand/fail/async_rejected.rs:2:1
+  |
+2 | async fn work() {}
+  | ^^^^^^^^^^^^^^^^^^

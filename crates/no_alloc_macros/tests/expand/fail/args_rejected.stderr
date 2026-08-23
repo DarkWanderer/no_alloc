@@ -1,5 +1,0 @@
-error: #[no_alloc] takes no arguments
- --> tests/expand/fail/args_rejected.rs:1:29
-  |
-1 | #[no_alloc_macros::no_alloc(oops)]
-  |                             ^^^^

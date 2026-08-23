@@ -1,0 +1,42 @@
+error: no_alloc: this function may reach the global allocator
+   --> dep/src/lib.rs:6:1
+    |
+  6 | pub fn root<T: Work>() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `generic_dep::root::<Allocates>`
+   --> dep/src/lib.rs:6:1
+    |
+  6 | pub fn root<T: Work>() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `<Allocates as generic_dep::Work>::work`
+   --> dep/src/lib.rs:7:5
+    |
+  7 |     T::work()
+    |     ^^^^^^^^^
+note: via `std::boxed::Box::<usize>::new`
+   --> app/src/main.rs:10:27
+    |
+ 10 |     fn work() -> usize { *Box::new(1) }
+    |                           ^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `generic_app` (bin "generic_app") due to 1 previous error

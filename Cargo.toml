@@ -1,23 +1,21 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/no_alloc",
-    "crates/no_alloc_macros",
+    "crates/no_alloc_check",
     "crates/no_alloc_report",
     "crates/no_alloc_analysis",
-    "crates/no_alloc_driver",
     "crates/cargo_no_alloc",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/dw/no_alloc"
+repository = "https://github.com/DarkWanderer/no_alloc"
 
 [workspace.dependencies]
-no_alloc_macros = { path = "crates/no_alloc_macros" }
-no_alloc_report = { path = "crates/no_alloc_report" }
-no_alloc_analysis = { path = "crates/no_alloc_analysis" }
+no_alloc_check = { version = "0.1.0", path = "crates/no_alloc_check" }
+no_alloc_report = { version = "0.1.0", path = "crates/no_alloc_report" }
+no_alloc_analysis = { version = "0.1.0", path = "crates/no_alloc_analysis" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 syn = { version = "2", features = ["full"] }
@@ -26,6 +24,7 @@ proc-macro2 = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fs2 = "0.4"
 
 [profile.dev]
 debug = 1

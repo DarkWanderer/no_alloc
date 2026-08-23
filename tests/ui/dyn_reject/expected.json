@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "dyn_reject::root",
       "instance": "root",
       "verdict": {
         "kind": "rejected",

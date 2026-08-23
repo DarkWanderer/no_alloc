@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "generic_split::root",
       "instance": "root::<AllocKind>",
       "verdict": {
         "kind": "violation",
@@ -34,7 +34,7 @@
       }
     },
     {
-      "root": "root",
+      "root": "generic_split::root",
       "instance": "root::<PureKind>",
       "verdict": {
         "kind": "pass"

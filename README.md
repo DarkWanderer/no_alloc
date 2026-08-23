@@ -1,89 +1,100 @@
 # no_alloc
 
-A tool that **proves** a designated set of Rust functions cannot reach the
-global allocator on any execution path.
+`no_alloc` statically checks that selected Rust function instances cannot
+reach the global allocator. It is intentionally conservative: unresolved
+calls are rejected instead of assumed safe.
 
-The motivating use case is latency-sensitive code (audio, real-time control,
-kernel-adjacent) where a single `malloc` lock acquisition is a defect. The
-guarantee is the product: any call edge whose callee body is not statically
-available is **rejected**, never assumed benign. False positives are the
-user's problem; false negatives are bugs in this tool.
+The checker is currently Linux-only and tied to `nightly-2026-08-01`.
 
-See [`docs/design.md`](docs/design.md) for the full design and the `adr/`
-directory for the load-bearing decisions.
+## Install and use
 
-## How it works, in one paragraph
+Install the marker macro first, then the Cargo command:
 
-`cargo-no-alloc` runs `cargo build`/`cargo test` with an out-of-tree
-`rustc_driver` binary (`no-alloc-driver`) substituted in as the compiler. The
-driver walks the **monomorphized instance graph** — not function definitions —
-starting from functions marked `#[no_alloc::no_alloc]`, follows every `Call`,
-`TailCall`, and `Drop` edge it can statically resolve, and checks whether any
-resolved callee is an allocator/deallocator terminal. Any edge it cannot
-resolve statically (`dyn` dispatch, function pointers, inline asm, or a
-MIR-less callee) is a rejection, not an assumption of safety.
+```bash
+cargo install no_alloc_check --version 0.1.0
+cargo install cargo-no-alloc --version 0.1.0
+```
 
-## Usage
+Mark functions and concrete methods with the stable-compatible attribute:
 
 ```rust
-#[no_alloc::no_alloc]
-fn process_audio_block(buf: &mut [f32]) {
-    // ...
+#[no_alloc_check::no_alloc]
+fn process(sample: f32) -> f32 {
+    sample * 0.5
 }
 ```
 
-```bash
-cargo no-alloc -- build
-```
-
-### Required lint configuration
-
-The marker expands to a `cfg_attr` that is inert on normal builds, but the
-`no_alloc_check` cfg it checks for is still unknown to `rustc` outside the
-checker driver. Add this to your crate to silence `unexpected_cfgs`:
+The macro rejects async functions, trait methods without bodies, and
+non-function items because their executable body cannot yet be selected
+soundly. Add this lint configuration to consumers:
 
 ```toml
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }
 ```
 
-This is the one piece of friction the design imposes on normal builds; see
-[ADR 0002](adr/0002-cfg-gated-tool-attribute-marker.md) for why.
+Run the checker with Cargo arguments after `--`:
 
-## Toolchain
-
-Pinned via `rust-toolchain.toml` to `nightly-2026-08-01`, with the
-`rustc-dev`, `rust-src`, and `llvm-tools-preview` components the driver needs
-to link against `librustc_driver`. First run:
-
-```bash
-rustup toolchain install nightly-2026-08-01 -c rustc-dev -c rust-src -c llvm-tools-preview
+```text
+cargo no-alloc [--all-crates] [--build-std] [--warn-only]
+               [--root PATH]... -- [build|test] [CARGO_ARGS...]
 ```
 
-## Verification
+`build` is the default. `check` is rejected because it does not produce the
+monomorphized graph. The checker owns its target and target directory, so
+user-supplied `--target` and `--target-dir` are rejected. `--root` selects an
+unannotated function by canonical path across the complete build.
+
+The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
+environment interfaces remain supported. The final deterministic report is
+written to `target/no-alloc/report.json`.
+
+See [`examples/basic`](examples/basic) for a runnable example.
+
+## Guarantee and limitations
+
+Analysis starts from each selected monomorphized `Instance`, follows resolved
+calls, tail calls, and drop glue, and detects allocator, deallocator,
+reallocator, and zeroed-allocator terminals. Function pointers, virtual
+dispatch, foreign calls without MIR, and inline assembly are rejected.
+
+`Unreachable`, `UnwindResume`, and `UnwindTerminate` are terminal control flow,
+not calls, and are treated as safe. Synthesized terminate-on-unwind actions are
+also safe. An `Assert` terminator is safe only when rustc definitively reports a
+non-unwinding panic strategy (`panic=abort` or immediate abort); with
+`panic=unwind`, it is rejected because the panic handler is outside the modeled
+call graph.
+
+Cross-crate generic roots are checked at downstream monomorphization sites.
+Per-rustc fragments are merged deterministically, and unmatched or non-function
+root specifications are reported rather than silently disappearing.
+
+See [`docs/design.md`](docs/design.md) and the [`adr/`](adr) directory for the
+design rationale and operational details.
+
+## Development verification
 
 ```bash
-cargo build --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo llvm-cov --workspace --summary-only -- --skip ui_matrix
 cargo bench
+cargo audit
 ```
 
-The `--skip ui_matrix` matters: `tests/ui.rs` exercises the analysis by
-spawning the built `cargo-no-alloc` binary as a subprocess, which
-`cargo llvm-cov` can't instrument — running it under coverage produces a
-spurious failure with no coverage benefit. See `docs/design.md` for why.
+## Release order
 
-## Status
+Prepare and publish, with separate explicit authorization, in this order:
 
-M0–M5 complete: driver, analysis, diagnostics, the full required 13-fixture
-regression suite (`tests/ui/`), macro unit tests, benchmarks, and coverage
-are all built and passing. See `docs/design.md` for what each milestone
-verified against the real toolchain (not assumed from docs for a different
-nightly) and the couple of deliberately-scoped gaps (sidecar root-index
-read/union across workspace crates; `-Zbuild-std`, measured off).
+1. `no_alloc_check`
+2. `no_alloc_report`
+3. `no_alloc_analysis`
+4. `cargo-no-alloc`
+
+Publishing is not part of repository verification and is never performed
+implicitly.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
+Licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).

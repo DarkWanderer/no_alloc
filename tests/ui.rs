@@ -25,6 +25,9 @@ use no_alloc_report::{Report, Verdict};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+static CHECKER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn cargo_no_alloc_bin() -> PathBuf {
     // `PROFILE` is only available to build scripts, not regular crates, so
@@ -64,7 +67,11 @@ fn diagnostic_only(stderr: &str) -> String {
         "Downloaded",
         "Fresh",
         "Blocking",
+        "Removed",
+        "no_alloc: checked",
         "Error: cargo exited with exit status",
+        "Error: Cargo exited with exit status",
+        "Error: no_alloc check failed",
     ];
     stderr
         .lines()
@@ -165,6 +172,9 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
 
 #[test]
 fn ui_matrix() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let bin = cargo_no_alloc_bin();
     assert!(
         bin.is_file(),
@@ -192,7 +202,7 @@ fn ui_matrix() {
     assert!(failures.is_empty(), "\n\n{}\n", failures.join("\n\n"));
 }
 
-/// The zero-footprint claim (ADR 0002): `#[no_alloc::no_alloc]` on stable,
+/// The zero-footprint claim (ADR 0002): `#[no_alloc_check::no_alloc]` on stable,
 /// with no checker involved at all, must compile clean — no
 /// `feature(register_tool)` residue, no restriction on what the function
 /// actually does. Uses `direct_alloc` deliberately: a function the checker
@@ -234,4 +244,163 @@ fn stable_build_has_zero_footprint() {
     }
 
     let _ = fs::remove_dir_all(&target_dir);
+}
+
+fn checker(case: &str, args: &[&str]) -> std::process::Output {
+    Command::new(cargo_no_alloc_bin())
+        .args(args)
+        .current_dir(ui_dir().join(case))
+        .env("NO_ALLOC_LOG", "off")
+        .env_remove("NO_ALLOC_WARN_ONLY")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .output()
+        .expect("run cargo-no-alloc")
+}
+
+#[test]
+fn cached_warn_only_does_not_hide_strict_failure() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let warning = checker("direct_alloc", &["--warn-only", "--", "build"]);
+    assert!(
+        warning.status.success(),
+        "{}",
+        String::from_utf8_lossy(&warning.stderr)
+    );
+    let report_path = ui_dir().join("direct_alloc/target/no-alloc/report.json");
+    let warning_report = fs::read(&report_path).unwrap();
+    let strict = checker("direct_alloc", &["--", "build"]);
+    assert!(!strict.status.success());
+    assert_eq!(warning_report, fs::read(&report_path).unwrap());
+    let report: Report = serde_json::from_reader(fs::File::open(report_path).unwrap()).unwrap();
+    assert!(!report.is_success());
+}
+
+#[test]
+fn unmatched_and_non_function_roots_are_reported() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let selected = checker(
+        "pure_arith",
+        &["--root", "pure_arith::selected", "--", "build"],
+    );
+    assert!(selected.status.success());
+    let selected_report: Report = serde_json::from_reader(
+        fs::File::open(ui_dir().join("pure_arith/target/no-alloc/report.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(selected_report
+        .roots
+        .iter()
+        .any(|root| root.root == "pure_arith::selected"));
+
+    let unmatched = checker("pure_arith", &["--root", "missing::root", "--", "build"]);
+    assert!(!unmatched.status.success());
+    assert!(String::from_utf8_lossy(&unmatched.stderr).contains("did not match any item"));
+
+    let non_function = checker(
+        "pure_arith",
+        &["--root", "pure_arith::VALUE", "--", "build"],
+    );
+    assert!(!non_function.status.success());
+    assert!(String::from_utf8_lossy(&non_function.stderr).contains("is not a function"));
+
+    let warning = checker(
+        "pure_arith",
+        &["--warn-only", "--root", "missing::root", "--", "build"],
+    );
+    assert!(warning.status.success());
+}
+
+#[test]
+fn rejects_check_and_forwards_test_runner_arguments() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(!checker("pure_arith", &["--", "check"]).status.success());
+    let test = checker("pure_arith", &["--", "test", "--", "--list"]);
+    assert!(
+        test.status.success(),
+        "{}",
+        String::from_utf8_lossy(&test.stderr)
+    );
+}
+
+#[test]
+fn cargo_external_subcommand_argv_is_supported() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let joined = std::env::join_paths(
+        std::iter::once(target_dir().join(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }))
+        .chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["no-alloc", "--", "build"])
+        .current_dir(ui_dir().join("pure_arith"))
+        .env("PATH", joined)
+        .env("NO_ALLOC_LOG", "off")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .output()
+        .expect("run cargo no-alloc");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn environment_interfaces_encoded_flags_and_all_crates_work() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let environment = Command::new(cargo_no_alloc_bin())
+        .args(["--", "build"])
+        .current_dir(ui_dir().join("direct_alloc"))
+        .env("NO_ALLOC_LOG", "off")
+        .env("NO_ALLOC_WARN_ONLY", "1")
+        .env("NO_ALLOC_ROOTS", "direct_alloc::root")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1fdebuginfo=0")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .output()
+        .expect("run cargo-no-alloc with environment interfaces");
+    assert!(
+        environment.status.success(),
+        "{}",
+        String::from_utf8_lossy(&environment.stderr)
+    );
+
+    let all_crates = checker("pure_arith", &["--all-crates", "--", "build"]);
+    assert!(
+        all_crates.status.success(),
+        "{}",
+        String::from_utf8_lossy(&all_crates.stderr)
+    );
+}
+
+#[test]
+fn multi_crate_report_is_deterministic() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let first = checker("multi_crate", &["--", "build"]);
+    assert!(first.status.success());
+    let report_path = ui_dir().join("multi_crate/target/no-alloc/report.json");
+    let first_report = fs::read(&report_path).unwrap();
+
+    let second = checker("multi_crate", &["--", "build"]);
+    assert!(second.status.success());
+    assert_eq!(first_report, fs::read(report_path).unwrap());
 }

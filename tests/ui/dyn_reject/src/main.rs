@@ -8,7 +8,7 @@ impl Greet for En {
     }
 }
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root() -> i32 {
     let obj: &dyn Greet = &En;
     obj.greet()

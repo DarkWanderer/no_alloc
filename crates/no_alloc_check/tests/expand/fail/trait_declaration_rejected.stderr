@@ -1,0 +1,5 @@
+error: #[no_alloc] cannot be applied to a trait method without a body
+ --> tests/expand/fail/trait_declaration_rejected.rs:3:5
+  |
+3 |     fn work(&self);
+  |     ^^^^^^^^^^^^^^^

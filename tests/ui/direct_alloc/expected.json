@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "direct_alloc::root",
       "instance": "root",
       "verdict": {
         "kind": "violation",

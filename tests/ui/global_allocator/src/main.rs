@@ -13,7 +13,7 @@ unsafe impl GlobalAlloc for MyAlloc {
 #[global_allocator]
 static GLOBAL: MyAlloc = MyAlloc;
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root() -> i32 {
     *Box::new(9)
 }

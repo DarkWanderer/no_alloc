@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "drop_field::root",
       "instance": "root",
       "verdict": {
         "kind": "violation",

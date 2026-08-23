@@ -16,7 +16,7 @@ impl MaybeAlloc for PureKind {
     }
 }
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root<K: MaybeAlloc>() -> i32 {
     K::get(41)
 }

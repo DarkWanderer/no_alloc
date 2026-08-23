@@ -1,4 +1,4 @@
-//! M5: turns a `Checked` result into a real rustc diagnostic — the chain
+//! Turns a `Checked` result into a real rustc diagnostic — the chain
 //! `root → … → __rust_alloc`, not a bare "this allocates" (path first, span
 //! polish is the whole point at mono-site granularity). Errors fail the
 //! build; `warn_only` (driven by `NO_ALLOC_WARN_ONLY`) downgrades to

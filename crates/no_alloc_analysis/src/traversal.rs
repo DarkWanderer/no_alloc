@@ -1,6 +1,5 @@
-//! The production DFS (M4/M5). Supersedes `probe.rs` (M3's leaf-predicate-
-//! only verification walker): full edge table (`Call`/`TailCall`/`Drop`/
-//! `InlineAsm`), memoized via a flat `HashSet<Instance<'tcx>>` (this is what
+//! The production DFS over the exhaustively classified MIR terminator table,
+//! memoized via a flat `HashSet<Instance<'tcx>>` (this is what
 //! makes the recursive-no-alloc-fn case terminate).
 //!
 //! **Violation takes priority over rejection within one function.** A
@@ -16,7 +15,7 @@
 //! allocator call was ever reached, misclassifying the textbook allocation
 //! case. Fixed by exploring every edge of a function before deciding: if
 //! any edge (or its subtree) is a violation, that wins; only if none is do
-//! we fall back to the first rejection found. Caught by the M4 test matrix,
+//! we fall back to the first rejection found. Caught by the UI test matrix,
 //! not by inspection — this is exactly the class of bug the matrix exists
 //! to catch (a plausible-looking traversal that's silently wrong).
 //!
@@ -140,7 +139,7 @@ fn visit<'tcx>(
 
     for bb in body.basic_blocks.iter() {
         let terminator = bb.terminator();
-        let edge = classify_terminator(
+        let edges = classify_terminator(
             tcx,
             instance,
             typing_env,
@@ -148,21 +147,23 @@ fn visit<'tcx>(
             &terminator.kind,
             terminator.source_info.span,
         );
-        match edge {
-            Edge::None => {}
-            Edge::Resolved(callee, span) => match visit(tcx, callee, span, visited, stack) {
-                Some(Finding::Violation(chain)) => {
-                    stack.pop();
-                    return Some(Finding::Violation(chain));
-                }
-                Some(finding @ Finding::Rejected(..)) => {
-                    pending_reject.get_or_insert(finding);
-                }
-                None => {}
-            },
-            Edge::Unresolved(reason) => {
-                if pending_reject.is_none() {
-                    pending_reject = Some(Finding::Rejected(stack.clone(), reason));
+        for edge in edges {
+            match edge {
+                Edge::None => {}
+                Edge::Resolved(callee, span) => match visit(tcx, callee, span, visited, stack) {
+                    Some(Finding::Violation(chain)) => {
+                        stack.pop();
+                        return Some(Finding::Violation(chain));
+                    }
+                    Some(finding @ Finding::Rejected(..)) => {
+                        pending_reject.get_or_insert(finding);
+                    }
+                    None => {}
+                },
+                Edge::Unresolved(reason) => {
+                    if pending_reject.is_none() {
+                        pending_reject = Some(Finding::Rejected(stack.clone(), reason));
+                    }
                 }
             }
         }
@@ -179,7 +180,8 @@ fn classify_terminator<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     kind: &TerminatorKind<'tcx>,
     term_span: Span,
-) -> Edge<'tcx> {
+) -> Vec<Edge<'tcx>> {
+    let mut edges = Vec::with_capacity(2);
     match kind {
         TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
             match func.const_fn_def() {
@@ -190,11 +192,11 @@ fn classify_terminator<'tcx>(
                         ty::EarlyBinder::bind(tcx, args),
                     );
                     match Instance::try_resolve(tcx, typing_env, def_id, args) {
-                        Ok(Some(callee)) => Edge::Resolved(callee, term_span),
-                        Ok(None) | Err(_) => Edge::Unresolved(format!(
+                        Ok(Some(callee)) => edges.push(Edge::Resolved(callee, term_span)),
+                        Ok(None) | Err(_) => edges.push(Edge::Unresolved(format!(
                             "callee `{}` could not be resolved to a concrete implementation",
                             tcx.def_path_str(def_id)
-                        )),
+                        ))),
                     }
                 }
                 // Covers fn pointers directly (non-`FnDef` callee type at
@@ -205,9 +207,9 @@ fn classify_terminator<'tcx>(
                 // Rejection here is deliberately not path-sensitive: this
                 // fires even inside a branch that can provably never
                 // execute.
-                None => Edge::Unresolved(
+                None => edges.push(Edge::Unresolved(
                     "callee is a function pointer, not a statically resolvable body".to_string(),
-                ),
+                )),
             }
         }
         TerminatorKind::Drop { place, .. } => {
@@ -218,16 +220,40 @@ fn classify_terminator<'tcx>(
                 ty::EarlyBinder::bind(tcx, ty),
             );
             if ty.needs_drop(tcx, typing_env) {
-                Edge::Resolved(Instance::resolve_drop_glue(tcx, ty), term_span)
+                edges.push(Edge::Resolved(
+                    Instance::resolve_drop_glue(tcx, ty),
+                    term_span,
+                ));
             } else {
-                Edge::None
+                edges.push(Edge::None);
             }
         }
         TerminatorKind::InlineAsm { .. } => {
-            Edge::Unresolved("inline assembly can call or do anything opaquely".to_string())
+            edges.push(Edge::Unresolved(
+                "inline assembly can call or do anything opaquely".to_string(),
+            ));
         }
-        _ => Edge::None,
+        TerminatorKind::Assert { .. } if tcx.sess.panic_strategy().unwinds() => {
+            edges.push(Edge::Unresolved(
+                "assertion may invoke the panic handler when panic=unwind".to_string(),
+            ));
+        }
+        TerminatorKind::Assert { .. } => edges.push(Edge::None),
+        TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::UnwindResume
+        | TerminatorKind::UnwindTerminate(_)
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => edges.push(Edge::None),
+        TerminatorKind::CoroutineDrop
+        | TerminatorKind::Yield { .. }
+        | TerminatorKind::FalseEdge { .. }
+        | TerminatorKind::FalseUnwind { .. } => edges.push(Edge::Unresolved(
+            "unexpected pre-lowering control-flow terminator".to_string(),
+        )),
     }
+
+    edges
 }
 
 fn to_frames<'tcx>(tcx: TyCtxt<'tcx>, chain: &[(Instance<'tcx>, Span)]) -> Vec<Frame> {

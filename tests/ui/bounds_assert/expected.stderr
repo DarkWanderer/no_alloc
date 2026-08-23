@@ -1,0 +1,13 @@
+error: no_alloc: this function has an unresolved call (assertion may invoke the panic handler when panic=unwind)
+ --> src/main.rs:2:1
+  |
+2 | fn root(values: &[u32], index: usize) -> u32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: via `root`
+ --> src/main.rs:2:1
+  |
+2 | fn root(values: &[u32], index: usize) -> u32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `bounds_assert` (bin "bounds_assert") due to 1 previous error

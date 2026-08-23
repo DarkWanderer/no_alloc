@@ -12,6 +12,7 @@ use std::process::Command;
 use std::time::Instant;
 
 const FIXTURE_FN_COUNT: u64 = 1365;
+const SAMPLE_COUNT: usize = 5;
 
 fn cargo_no_alloc_bin() -> PathBuf {
     // `CARGO_MANIFEST_DIR` here is the workspace root (this package is the
@@ -22,18 +23,9 @@ fn cargo_no_alloc_bin() -> PathBuf {
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
-    // `cargo bench` builds this harness in `release` by default, but the
-    // driver is normally only built in `debug` (the documented workflow is
-    // `cargo build --workspace` with no `--release`). Timing a release
-    // driver against a debug one would be misleading either way, so: use
-    // release if it happens to exist (a more meaningful throughput number),
-    // otherwise fall back to debug rather than requiring an extra build.
-    let release = target_dir.join("release").join("cargo-no-alloc");
-    if release.is_file() {
-        release
-    } else {
-        target_dir.join("debug").join("cargo-no-alloc")
-    }
+    // Keep the measured binary profile fixed across runs. The documented
+    // prerequisite builds the checker in dev mode.
+    target_dir.join("debug").join("cargo-no-alloc")
 }
 
 fn fixture_dir() -> PathBuf {
@@ -59,25 +51,33 @@ fn main() {
     );
     let dir = fixture_dir();
 
-    // Warm up: build dependencies (no_alloc, no_alloc_macros) once, uncounted.
+    // Warm up: build the no_alloc_check dependency once, uncounted.
     let status = run(&bin, &dir);
     assert!(status.success(), "warmup build failed");
 
-    // Force a real re-analysis of the fixture crate itself (cargo would
-    // otherwise see nothing changed and skip invoking the driver at all).
     let src = dir.join("src/main.rs");
     let contents = std::fs::read_to_string(&src).expect("read fixture source");
-    std::fs::write(&src, contents).expect("touch fixture source");
+    let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+    for sample in 1..=SAMPLE_COUNT {
+        // Rewriting identical contents updates mtime and forces Cargo to invoke
+        // the checker instead of returning a cached success.
+        std::fs::write(&src, &contents).expect("touch fixture source");
 
-    let start = Instant::now();
-    let status = run(&bin, &dir);
-    let elapsed = start.elapsed();
-    assert!(status.success(), "timed build failed");
+        let start = Instant::now();
+        let status = run(&bin, &dir);
+        let elapsed = start.elapsed();
+        assert!(status.success(), "timed build {sample} failed");
+        let rate = FIXTURE_FN_COUNT as f64 / elapsed.as_secs_f64();
+        println!(
+            "sample {sample}: {FIXTURE_FN_COUNT} functions in {:.3}s ({rate:.0} instances/sec)",
+            elapsed.as_secs_f64()
+        );
+        samples.push(rate);
+    }
 
-    let instances_per_sec = FIXTURE_FN_COUNT as f64 / elapsed.as_secs_f64();
+    samples.sort_by(f64::total_cmp);
     println!(
-        "throughput: {FIXTURE_FN_COUNT} functions visited in {:.3}s ({:.0} instances/sec)",
-        elapsed.as_secs_f64(),
-        instances_per_sec
+        "median throughput: {:.0} instances/sec",
+        samples[SAMPLE_COUNT / 2]
     );
 }

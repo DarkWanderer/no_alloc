@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-01
+          components: rustc-dev,rust-src,llvm-tools-preview,rustfmt,clippy
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo +stable test -p no_alloc_check -p no_alloc_report
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      - run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+      - run: cargo llvm-cov --workspace --summary-only -- --skip ui_matrix
+      - run: cargo llvm-cov -p cargo-no-alloc --lib --summary-only
+      - run: cargo bench --no-run
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+      - run: cargo package -p no_alloc_check --no-verify
+      - run: cargo package -p no_alloc_report --no-verify
+      # These depend on packages staged earlier in the publication order.
+      # Before those exist on crates.io, `--list` verifies their contents
+      # without pretending registry resolution can succeed.
+      - run: cargo package -p no_alloc_analysis --list
+      - run: cargo package -p cargo-no-alloc --list
+      - name: Install smoke test
+        shell: bash
+        run: |
+          install_root="$(mktemp -d)"
+          cargo install --path crates/cargo_no_alloc --root "$install_root"
+          test -x "$install_root/bin/cargo-no-alloc"
+          test -x "$install_root/bin/no-alloc-driver"
+          PATH="$install_root/bin:$PATH" cargo no-alloc --warn-only -- build --manifest-path examples/basic/Cargo.toml

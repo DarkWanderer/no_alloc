@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "inline_asm_reject::root",
       "instance": "root",
       "verdict": {
         "kind": "rejected",

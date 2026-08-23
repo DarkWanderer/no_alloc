@@ -1,9 +1,9 @@
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root(n: u32) -> u32 {
     if n == 0 {
         0
     } else {
-        1 + root(n - 1)
+        root(n.wrapping_sub(1)).wrapping_add(1)
     }
 }
 

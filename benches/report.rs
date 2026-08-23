@@ -18,6 +18,7 @@ fn deep_report(depth: usize) -> Report {
             instance: "root".into(),
             verdict: Verdict::Violation { chain },
         }],
+        selection_errors: vec![],
     }
 }
 
@@ -46,10 +47,18 @@ fn bench_report_round_trip(c: &mut Criterion) {
     });
 }
 
+fn bench_report_merge(c: &mut Criterion) {
+    let reports: Vec<_> = (0..64).map(|_| deep_report(8)).collect();
+    c.bench_function("report/merge_64_reports", |b| {
+        b.iter(|| Report::merge(std::hint::black_box(reports.clone())))
+    });
+}
+
 criterion_group!(
     benches,
     bench_root_spec_parsing,
     bench_report_serialize,
-    bench_report_round_trip
+    bench_report_round_trip,
+    bench_report_merge
 );
 criterion_main!(benches);

@@ -6,10 +6,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-no_alloc = { path = "../../../crates/no_alloc" }
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+[profile.dev]
+panic = "abort"
+debug = 0
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }
-
-[profile.dev]
-debug = 0

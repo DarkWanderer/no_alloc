@@ -1,0 +1,11 @@
+{
+  "roots": [
+    {
+      "root": "panic_abort::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

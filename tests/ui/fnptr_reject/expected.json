@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "root",
+      "root": "fnptr_reject::root",
       "instance": "root",
       "verdict": {
         "kind": "rejected",

@@ -1,6 +1,6 @@
 struct Holder(String);
 
-#[no_alloc::no_alloc]
+#[no_alloc_check::no_alloc]
 fn root(h: Holder) {
     let _ = h;
 }

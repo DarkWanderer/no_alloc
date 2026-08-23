@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "rustc-internals analysis: root collection, leaf predicate, mono-graph traversal."
+readme = "../../README.md"
+keywords = ["allocation", "realtime", "static-analysis"]
+categories = ["development-tools"]
 
 # rustc-private sysroot crates ship dylib+rmeta only, no rlib; cargo's default
 # unittest harness links the lib as an rlib and fails even with zero #[test]
@@ -16,6 +19,3 @@ doctest = false
 
 [dependencies]
 no_alloc_report = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }

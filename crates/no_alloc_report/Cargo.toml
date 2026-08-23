@@ -4,7 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Stable-only report/verdict types, root-spec parsing, sidecar serde, path rendering for no_alloc."
+description = "Stable report and verdict types for cargo-no-alloc."
+rust-version = "1.85"
+readme = "../../README.md"
+keywords = ["allocation", "report", "static-analysis"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }
