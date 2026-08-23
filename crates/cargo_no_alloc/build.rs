@@ -54,12 +54,6 @@ fn main() -> anyhow::Result<()> {
         sysroot_path.join("lib/rustlib/src/rust/library").is_dir(),
         "nightly-2026-08-01 is missing the rust-src component"
     );
-    ensure!(
-        sysroot_path
-            .join(format!("lib/rustlib/{host}/bin/llvm-profdata"))
-            .is_file(),
-        "nightly-2026-08-01 is missing the llvm-tools-preview component"
-    );
     let driver_found = std::fs::read_dir(sysroot_path.join("lib"))?
         .filter_map(Result::ok)
         .any(|entry| {

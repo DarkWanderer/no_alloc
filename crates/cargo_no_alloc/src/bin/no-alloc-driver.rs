@@ -74,7 +74,15 @@ impl Callbacks for NoAllocCallbacks {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("target/no-alloc/fragments"));
         let crate_name = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE);
-        let fragment_path = fragment_dir.join(format!("{crate_name}-{}.json", std::process::id()));
+        // PID alone can collide across separate driver invocations if the OS
+        // recycles it during a long build; the nanosecond timestamp makes
+        // that astronomically unlikely without adding a dependency.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let fragment_path =
+            fragment_dir.join(format!("{crate_name}-{}-{nanos}.json", std::process::id()));
         let fragment = ReportFragment {
             report,
             matched_root_specs: discovery.matched_root_specs,

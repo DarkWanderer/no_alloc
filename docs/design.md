@@ -56,12 +56,16 @@ rejections.
 The terminator classification is documented in
 [ADR 0003](../adr/0003-reject-unresolved-edges.md). In particular, terminal
 unwind control flow is not a call. Assertions pass only under a compiler-known
-non-unwinding panic strategy and otherwise reject.
+non-unwinding panic strategy and otherwise reject. That "pass" is a scope
+exclusion, not a proof: the traversal's guarantee covers a root's
+non-panicking execution paths only (`README.md`, "Guarantee and
+limitations").
 
 ## Verification
 
 Unit tests cover macro shapes, CLI parsing, report merging, and stable report
 logic. Full toy crates under `tests/ui/` are authoritative for rustc-private
 behavior, including cross-crate roots and multi-crate aggregation. The
-throughput harness performs five real checker rebuilds and reports the median;
-the pre-hardening reference on this machine was 8,954 instances/second.
+throughput harness performs five real checker rebuilds and reports the
+median instances/second; there is no fixed reference number, since it is
+machine-dependent — run `cargo bench` locally to get one.

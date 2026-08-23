@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One stack frame in a violation chain, root-to-terminal order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Frame {
     /// `def_path_str` of the instance at this frame.
     pub def_path: String,
@@ -9,7 +9,7 @@ pub struct Frame {
     pub span: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Verdict {
     /// Every reachable instance bottomed out without touching the allocator.
@@ -61,11 +61,7 @@ impl Report {
             merged.selection_errors.extend(report.selection_errors);
         }
         merged.roots.sort_by(|a, b| {
-            (&a.root, &a.instance, format!("{:?}", a.verdict)).cmp(&(
-                &b.root,
-                &b.instance,
-                format!("{:?}", b.verdict),
-            ))
+            (&a.root, &a.instance, &a.verdict).cmp(&(&b.root, &b.instance, &b.verdict))
         });
         merged.roots.dedup();
         let instantiated: std::collections::HashSet<_> = merged

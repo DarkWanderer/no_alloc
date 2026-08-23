@@ -1,0 +1,33 @@
+{
+  "roots": [
+    {
+      "root": "drop_dyn::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "violation",
+        "chain": [
+          {
+            "def_path": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::drop_glue",
+            "span": null
+          },
+          {
+            "def_path": "<std::boxed::Box<T, A> as std::ops::Drop>::drop",
+            "span": null
+          },
+          {
+            "def_path": "<std::alloc::Global as std::alloc::Allocator>::deallocate",
+            "span": null
+          },
+          {
+            "def_path": "alloc::alloc::__rust_dealloc",
+            "span": null
+          }
+        ]
+      }
+    }
+  ]
+}

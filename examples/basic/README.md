@@ -3,8 +3,8 @@
 A minimal crate demonstrating `no_alloc` on two functions:
 
 - `safe_sum` — an index-based loop over a slice. Passes.
-- `unsafe_alloc` — calls `Box::new`. Rejected, with the full call chain down
-  to the allocator.
+- `unsafe_alloc` — calls `Box::new`. Flagged as a violation, with the full
+  call chain down to the allocator.
 
 ## Run
 

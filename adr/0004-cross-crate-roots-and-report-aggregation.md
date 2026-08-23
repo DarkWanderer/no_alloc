@@ -27,5 +27,9 @@ entry for the same canonical root.
 
 No sidecar root index is needed. Cross-crate metadata supplies the marker and
 the downstream mono graph supplies the executable instance. Multi-crate builds
-cannot lose reports through last-writer-wins races, and requested roots cannot
-disappear silently.
+cannot lose reports through last-writer-wins races, and a requested `--root`
+specification cannot disappear silently — an unmatched one is reported as a
+selection error. This does not extend to `#[no_alloc]` markers themselves: in
+the default (non-`--all-crates`) invocation mode, a marker in a non-workspace
+dependency is never instrumented and never appears in the report at all,
+silently (see `README.md`'s `--all-crates` documentation).
