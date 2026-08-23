@@ -131,6 +131,41 @@ fn host_triple() -> Result<String> {
         .to_owned())
 }
 
+fn sysroot_lib_dir() -> Result<PathBuf> {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let output = Command::new(&rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .with_context(|| format!("failed to run `{rustc} --print sysroot`"))?;
+    ensure!(
+        output.status.success(),
+        "`{rustc} --print sysroot` exited with {}",
+        output.status
+    );
+    let sysroot = String::from_utf8(output.stdout)
+        .context("sysroot path is not valid UTF-8")?
+        .trim()
+        .to_owned();
+    Ok(PathBuf::from(sysroot).join("lib"))
+}
+
+// `no-alloc-driver` dynamically links `librustc_driver-*.so`/`libLLVM.so`,
+// which live in the sysroot rather than next to the binary. A binary built
+// on one machine (e.g. CI) and run on another can't rely on a path baked in
+// at build time, so this is resolved fresh from whatever `rustc` is active
+// for the invoking project and threaded through as `LD_LIBRARY_PATH`.
+fn combined_ld_library_path(sysroot_lib: &Path, existing: Option<&std::ffi::OsStr>) -> OsString {
+    match existing {
+        Some(existing) if !existing.is_empty() => {
+            let mut combined = sysroot_lib.as_os_str().to_owned();
+            combined.push(":");
+            combined.push(existing);
+            combined
+        }
+        _ => sysroot_lib.as_os_str().to_owned(),
+    }
+}
+
 fn find_driver() -> Result<PathBuf> {
     let exe = env::current_exe().context("failed to resolve current executable")?;
     let sibling = exe
@@ -231,7 +266,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         inv.warn_only = true;
     }
     if env::var_os("RUSTC_WRAPPER").is_some() || env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some() {
-        bail!("existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc");
+        bail!(
+            "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc"
+        );
     }
     if let Ok(existing) = env::var("NO_ALLOC_ROOTS") {
         inv.roots.extend(parse_root_spec(&existing));
@@ -286,6 +323,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         command.env_remove("NO_ALLOC_WARN_ONLY");
     }
     let driver = find_driver()?;
+    let sysroot_lib = sysroot_lib_dir()?;
+    command.env(
+        "LD_LIBRARY_PATH",
+        combined_ld_library_path(&sysroot_lib, env::var_os("LD_LIBRARY_PATH").as_deref()),
+    );
     if inv.all_crates {
         command.env("RUSTC_WRAPPER", driver);
     } else {
@@ -328,6 +370,36 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Invocation> {
         parse_args(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn ld_library_path_without_existing_value() {
+        assert_eq!(
+            combined_ld_library_path(Path::new("/fake/sysroot/lib"), None),
+            OsString::from("/fake/sysroot/lib")
+        );
+    }
+
+    #[test]
+    fn ld_library_path_prepended_to_existing_value() {
+        assert_eq!(
+            combined_ld_library_path(
+                Path::new("/fake/sysroot/lib"),
+                Some(std::ffi::OsStr::new("/other/lib"))
+            ),
+            OsString::from("/fake/sysroot/lib:/other/lib")
+        );
+    }
+
+    #[test]
+    fn ld_library_path_treats_empty_existing_value_as_absent() {
+        assert_eq!(
+            combined_ld_library_path(
+                Path::new("/fake/sysroot/lib"),
+                Some(std::ffi::OsStr::new(""))
+            ),
+            OsString::from("/fake/sysroot/lib")
+        );
     }
 
     #[test]
@@ -452,7 +524,7 @@ mod tests {
         let fake_rustc = directory.join("rustc");
         std::fs::write(
             &fake_rustc,
-            "#!/bin/sh\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nexit 1\n",
+            "#!/bin/sh\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
         )?;
         let fake_cargo = directory.join("cargo");
         std::fs::write(

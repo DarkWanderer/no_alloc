@@ -1,6 +1,9 @@
-//! Links the driver against `librustc_driver-*.so` at runtime by baking the
-//! pinned toolchain's sysroot lib dir into an rpath, so `no-alloc-driver`
-//! works from outside a `cargo run` invocation (e.g. as `RUSTC_WORKSPACE_WRAPPER`).
+//! Fails the build early if the active toolchain isn't exactly the pinned
+//! nightly with the components `no-alloc-driver` needs at runtime. The
+//! driver itself locates `librustc_driver-*.so`/`libLLVM.so` via
+//! `LD_LIBRARY_PATH`, set by `cargo_no_alloc::run` from the *invoking*
+//! machine's sysroot — not baked in here — so a binary built on one machine
+//! (e.g. CI) keeps working when run on another.
 
 use anyhow::{bail, ensure, Context};
 use std::path::Path;
@@ -66,7 +69,6 @@ fn main() -> anyhow::Result<()> {
         bail!("nightly-2026-08-01 sysroot does not contain librustc_driver");
     }
 
-    println!("cargo::rustc-link-arg-bin=no-alloc-driver=-Wl,-rpath,{sysroot}/lib");
     println!("cargo::rerun-if-changed=build.rs");
     Ok(())
 }

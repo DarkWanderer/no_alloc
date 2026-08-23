@@ -18,6 +18,12 @@ path = "src/main.rs"
 name = "no-alloc-driver"
 path = "src/bin/no-alloc-driver.rs"
 
+# Linux x86_64 only, matching build.rs's toolchain check: the release
+# workflow only publishes that one target's archive.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/cargo-no-alloc-{ target }.tar.gz"
+pkg-fmt = "tgz"
+
 [dependencies]
 anyhow = { workspace = true }
 fs2 = { workspace = true }
