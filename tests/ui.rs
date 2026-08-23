@@ -7,10 +7,12 @@
 //!   `def_path`s plus the verdict kind/reason is the stable, meaningful
 //!   part). This is what should catch a real regression.
 //! - `expected.stderr`: a snapshot of the full rendered diagnostic output,
-//!   including real spans. Machine-specific by nature (rustup install
-//!   paths), so it's explicitly a snapshot, not a portability guarantee —
-//!   re-bless with `NO_ALLOC_BLESS=1` when the toolchain or its install
-//!   path changes.
+//!   including real spans. rustc renders stdlib notes with an absolute
+//!   sysroot path, which varies by machine (`/home/you/.rustup/...` locally
+//!   vs. `/home/runner/.rustup/...` on CI); [`diagnostic_only`] replaces the
+//!   active `rustc --print sysroot` with a `<sysroot>` placeholder so the
+//!   snapshot is portable. Re-bless with `NO_ALLOC_BLESS=1` when the
+//!   toolchain changes and the rendered diagnostics genuinely differ.
 //!
 //! Requires `cargo build --workspace` to have already produced
 //! `cargo-no-alloc`/`no-alloc-driver` in `target/<profile>/` —
@@ -25,9 +27,31 @@ use no_alloc_report::{Report, Verdict};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 static CHECKER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// The active toolchain's sysroot (e.g.
+/// `/home/you/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu`),
+/// used to scrub machine-specific rustlib source paths out of diagnostic
+/// snapshots. `rust-toolchain.toml` at the workspace root pins the channel,
+/// so this resolves to the same toolchain `cargo-no-alloc` itself invokes.
+fn sysroot() -> &'static str {
+    static SYSROOT: OnceLock<String> = OnceLock::new();
+    SYSROOT.get_or_init(|| {
+        let output = Command::new("rustc")
+            .arg("--print")
+            .arg("sysroot")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("run rustc --print sysroot");
+        assert!(output.status.success(), "rustc --print sysroot failed");
+        String::from_utf8(output.stdout)
+            .expect("rustc sysroot output is UTF-8")
+            .trim()
+            .to_owned()
+    })
+}
 
 fn cargo_no_alloc_bin() -> PathBuf {
     // `PROFILE` is only available to build scripts, not regular crates, so
@@ -73,7 +97,7 @@ fn diagnostic_only(stderr: &str) -> String {
         "Error: Cargo exited with exit status",
         "Error: no_alloc check failed",
     ];
-    stderr
+    let filtered = stderr
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start();
@@ -82,7 +106,8 @@ fn diagnostic_only(stderr: &str) -> String {
                 .any(|prefix| trimmed.starts_with(prefix))
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    filtered.replace(sysroot(), "<sysroot>")
 }
 
 /// Strips spans (see module doc) and keeps `expected.json` deterministic
@@ -113,6 +138,11 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .current_dir(case_dir)
         .env_remove("NO_ALLOC_WARN_ONLY")
         .env("NO_ALLOC_LOG", "off")
+        // The expected.stderr snapshot is plain text; forcing color off
+        // here keeps the comparison stable regardless of the caller's own
+        // `CARGO_TERM_COLOR` (CI sets `always`, which would otherwise leak
+        // ANSI escapes into the diagnostic and break every snapshot).
+        .env("CARGO_TERM_COLOR", "never")
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
     let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr));
