@@ -1,0 +1,24 @@
+warning: formatting may not be suitable for sub-register argument
+ --> src/main.rs:7:19
+  |
+7 |         asm!("mov {0}, 5", out(reg) x);
+  |                   ^^^               - for this argument
+  |
+  = help: use `{0:e}` to have the register formatted as `eax` (for 32-bit values)
+  = help: or use `{0:r}` to keep the default formatting of `rax` (for 64-bit values)
+  = note: `#[warn(asm_sub_register)]` on by default
+
+error: no_alloc: this function has an unresolved call (inline assembly can call or do anything opaquely)
+ --> src/main.rs:4:1
+  |
+4 | fn root() -> i32 {
+  | ^^^^^^^^^^^^^^^^
+  |
+note: via `root`
+ --> src/main.rs:4:1
+  |
+4 | fn root() -> i32 {
+  | ^^^^^^^^^^^^^^^^
+
+warning: `inline_asm_reject` (bin "inline_asm_reject") generated 1 warning
+error: could not compile `inline_asm_reject` (bin "inline_asm_reject") due to 1 previous error; 1 warning emitted

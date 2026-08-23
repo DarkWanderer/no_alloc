@@ -1,0 +1,21 @@
+[package]
+name = "no_alloc_analysis"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "rustc-internals analysis: root collection, leaf predicate, mono-graph traversal."
+
+# rustc-private sysroot crates ship dylib+rmeta only, no rlib; cargo's default
+# unittest harness links the lib as an rlib and fails even with zero #[test]
+# fns in this crate. Unit-testable logic belongs in no_alloc_report instead;
+# this crate is exercised end-to-end by tests/ui.rs against the built driver.
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+no_alloc_report = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
