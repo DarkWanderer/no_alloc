@@ -1,0 +1,73 @@
+warning: field `0` is never read
+ --> src/main.rs:1:15
+  |
+1 | struct Holder(String);
+  |        ------ ^^^^^^
+  |        |
+  |        field in this struct
+  |
+  = help: consider removing this field
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+error: no_alloc: this function may reach the global allocator
+   --> src/main.rs:4:1
+    |
+  4 | fn root(h: Holder) {
+    | ^^^^^^^^^^^^^^^^^^
+    |
+note: via `root`
+   --> src/main.rs:4:1
+    |
+  4 | fn root(h: Holder) {
+    | ^^^^^^^^^^^^^^^^^^
+note: via `std::ptr::drop_glue::<Holder> - shim(Some(Holder))`
+   --> src/main.rs:6:1
+    |
+  6 | }
+    | ^
+note: via `std::ptr::drop_glue::<std::string::String> - shim(Some(std::string::String))`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+    |
+828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
+829 | | where
+830 | |     T: [const] Destruct,
+    | |________________________^
+note: via `std::ptr::drop_glue::<std::vec::Vec<u8>> - shim(Some(std::vec::Vec<u8>))`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+    |
+828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
+829 | | where
+830 | |     T: [const] Destruct,
+    | |________________________^
+note: via `std::ptr::drop_glue::<alloc::raw_vec::RawVec<u8>> - shim(Some(alloc::raw_vec::RawVec<u8>))`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+    |
+828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
+829 | | where
+830 | |     T: [const] Destruct,
+    | |________________________^
+note: via `<alloc::raw_vec::RawVec<u8> as std::ops::Drop>::drop`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+    |
+828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
+829 | | where
+830 | |     T: [const] Destruct,
+    | |________________________^
+note: via `alloc::raw_vec::RawVecInner::deallocate`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:425:18
+    |
+425 |         unsafe { self.inner.deallocate(T::LAYOUT) }
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `<std::alloc::Global as std::alloc::Allocator>::deallocate`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:876:17
+    |
+876 |                 self.alloc.deallocate(ptr, layout);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `alloc::alloc::__rust_dealloc`
+   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:169:14
+    |
+169 |     unsafe { __rust_dealloc(ptr, layout.size(), layout.alignment()) }
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `drop_field` (bin "drop_field") generated 1 warning
+error: could not compile `drop_field` (bin "drop_field") due to 1 previous error; 1 warning emitted

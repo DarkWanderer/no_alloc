@@ -1,0 +1,13 @@
+error: no_alloc: this function has an unresolved call (callee is a function pointer, not a statically resolvable body)
+ --> src/main.rs:6:1
+  |
+6 | fn root() -> i32 {
+  | ^^^^^^^^^^^^^^^^
+  |
+note: via `root`
+ --> src/main.rs:6:1
+  |
+6 | fn root() -> i32 {
+  | ^^^^^^^^^^^^^^^^
+
+error: could not compile `fnptr_reject` (bin "fnptr_reject") due to 1 previous error

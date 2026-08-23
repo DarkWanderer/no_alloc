@@ -1,0 +1,22 @@
+{
+  "roots": [
+    {
+      "root": "root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "span": null
+          },
+          {
+            "def_path": "abs",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      }
+    }
+  ]
+}

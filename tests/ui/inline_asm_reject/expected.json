@@ -1,0 +1,18 @@
+{
+  "roots": [
+    {
+      "root": "root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "span": null
+          }
+        ],
+        "reason": "inline assembly can call or do anything opaquely"
+      }
+    }
+  ]
+}

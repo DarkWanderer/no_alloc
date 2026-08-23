@@ -1,0 +1,11 @@
+{
+  "roots": [
+    {
+      "root": "root",
+      "instance": "root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

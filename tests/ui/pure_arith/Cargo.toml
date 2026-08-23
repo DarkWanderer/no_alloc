@@ -1,0 +1,12 @@
+[workspace]
+
+[package]
+name = "pure_arith"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+no_alloc = { path = "../../../crates/no_alloc" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

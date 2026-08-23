@@ -1,0 +1,55 @@
+//! Criterion benchmarks over the pure parts of `no_alloc_report`: no
+//! `TyCtxt` involved, so these run on stable and track regressions in the
+//! logic every root/rejection/pass verdict passes through.
+
+use criterion::{criterion_group, criterion_main, Criterion};
+use no_alloc_report::{parse_root_spec, Frame, Report, RootVerdict, Verdict};
+
+fn deep_report(depth: usize) -> Report {
+    let chain = (0..depth)
+        .map(|i| Frame {
+            def_path: format!("crate_{i}::module_{i}::function_{i}"),
+            span: Some(format!("src/lib_{i}.rs:{i}:1")),
+        })
+        .collect();
+    Report {
+        roots: vec![RootVerdict {
+            root: "root".into(),
+            instance: "root".into(),
+            verdict: Verdict::Violation { chain },
+        }],
+    }
+}
+
+fn bench_root_spec_parsing(c: &mut Criterion) {
+    let spec = (0..64)
+        .map(|i| format!("mycrate::module_{i}::function_{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    c.bench_function("parse_root_spec/64_entries", |b| {
+        b.iter(|| parse_root_spec(std::hint::black_box(&spec)))
+    });
+}
+
+fn bench_report_serialize(c: &mut Criterion) {
+    let report = deep_report(64);
+    c.bench_function("report/serialize_64_frame_chain", |b| {
+        b.iter(|| serde_json::to_string(std::hint::black_box(&report)).unwrap())
+    });
+}
+
+fn bench_report_round_trip(c: &mut Criterion) {
+    let report = deep_report(64);
+    let json = serde_json::to_string(&report).unwrap();
+    c.bench_function("report/deserialize_64_frame_chain", |b| {
+        b.iter(|| serde_json::from_str::<Report>(std::hint::black_box(&json)).unwrap())
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_root_spec_parsing,
+    bench_report_serialize,
+    bench_report_round_trip
+);
+criterion_main!(benches);
