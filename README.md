@@ -82,3 +82,8 @@ are all built and passing. See `docs/design.md` for what each milestone
 verified against the real toolchain (not assumed from docs for a different
 nightly) and the couple of deliberately-scoped gaps (sidecar root-index
 read/union across workspace crates; `-Zbuild-std`, measured off).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
