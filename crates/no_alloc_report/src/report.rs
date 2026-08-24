@@ -3,8 +3,16 @@ use serde::{Deserialize, Serialize};
 /// One stack frame in a violation chain, root-to-terminal order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Frame {
-    /// `def_path_str` of the instance at this frame.
+    /// `def_path_str` of the instance at this frame — the definition-level
+    /// grouping key (generic parameters, not the concrete arguments).
     pub def_path: String,
+    /// The monomorphized rendering (`instance.to_string()`), e.g.
+    /// `std::boxed::Box::<i32>::new`. Kept alongside `def_path` because the
+    /// analysis is per-instantiation (see ADR 0001): a chain over a generic
+    /// function needs the concrete type arguments to be meaningful, and this
+    /// is exactly what the stderr `via `{instance}`` notes already render,
+    /// so the JSON and the diagnostic agree.
+    pub instance: String,
     /// Rendered span, e.g. `src/lib.rs:12:5`; tests may normalize it to `None`.
     pub span: Option<String>,
 }
@@ -171,6 +179,7 @@ mod tests {
                 verdict: Verdict::Rejected {
                     chain: vec![Frame {
                         def_path: "a::b".into(),
+                        instance: "a::b::<u32>".into(),
                         span: Some("src/lib.rs:1:1".into()),
                     }],
                     reason: "dyn dispatch".into(),
@@ -182,6 +191,23 @@ mod tests {
         let back: Report = serde_json::from_str(&json).unwrap();
         assert_eq!(report.roots.len(), back.roots.len());
         assert!(!back.is_success());
+    }
+
+    /// `instance` and `def_path` diverge for a generic frame (concrete type
+    /// arguments vs. generic parameters); the round trip must keep both,
+    /// distinct, through serde.
+    #[test]
+    fn frame_instance_round_trips_distinctly_from_def_path() {
+        let frame = Frame {
+            def_path: "std::boxed::Box::<T>::new".into(),
+            instance: "std::boxed::Box::<i32>::new".into(),
+            span: Some("src/lib.rs:1:1".into()),
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"instance\":\"std::boxed::Box::<i32>::new\""));
+        let back: Frame = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, frame);
+        assert_ne!(back.instance, back.def_path);
     }
 
     #[test]

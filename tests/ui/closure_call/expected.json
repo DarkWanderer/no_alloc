@@ -15,18 +15,22 @@
         "chain": [
           {
             "def_path": "sum_via_for_loop",
+            "instance": "sum_via_for_loop",
             "span": null
           },
           {
             "def_path": "<std::slice::Iter<'a, T> as std::iter::Iterator>::next",
+            "instance": "<std::slice::Iter<'_, u32> as std::iter::Iterator>::next",
             "span": null
           },
           {
             "def_path": "core::num::<impl usize>::unchecked_sub::precondition_check",
+            "instance": "core::num::<impl usize>::unchecked_sub::precondition_check",
             "span": null
           },
           {
             "def_path": "core::panicking::panic_nounwind_fmt",
+            "instance": "core::panicking::panic_nounwind_fmt",
             "span": null
           }
         ],

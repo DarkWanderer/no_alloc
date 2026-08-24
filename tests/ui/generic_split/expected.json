@@ -8,26 +8,32 @@
         "chain": [
           {
             "def_path": "root",
+            "instance": "root::<AllocKind>",
             "span": null
           },
           {
             "def_path": "<AllocKind as MaybeAlloc>::get",
+            "instance": "<AllocKind as MaybeAlloc>::get",
             "span": null
           },
           {
             "def_path": "std::boxed::Box::<T>::new",
+            "instance": "std::boxed::Box::<i32>::new",
             "span": null
           },
           {
             "def_path": "std::boxed::box_new_uninit",
+            "instance": "std::boxed::box_new_uninit",
             "span": null
           },
           {
             "def_path": "std::alloc::Global::alloc_impl_runtime",
+            "instance": "std::alloc::Global::alloc_impl_runtime",
             "span": null
           },
           {
             "def_path": "alloc::alloc::__rust_alloc_zeroed",
+            "instance": "alloc::alloc::__rust_alloc_zeroed",
             "span": null
           }
         ]

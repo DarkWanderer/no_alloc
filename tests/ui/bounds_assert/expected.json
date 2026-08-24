@@ -8,6 +8,7 @@
         "chain": [
           {
             "def_path": "root",
+            "instance": "root",
             "span": null
           }
         ],

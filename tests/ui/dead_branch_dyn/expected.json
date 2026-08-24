@@ -8,10 +8,12 @@
         "chain": [
           {
             "def_path": "root",
+            "instance": "root",
             "span": null
           },
           {
             "def_path": "Greet::greet",
+            "instance": "<dyn Greet as Greet>::greet - virtual#3",
             "span": null
           }
         ],

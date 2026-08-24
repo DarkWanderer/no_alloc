@@ -8,38 +8,47 @@
         "chain": [
           {
             "def_path": "root",
+            "instance": "root",
             "span": null
           },
           {
             "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<Holder> - shim(Some(Holder))",
             "span": null
           },
           {
             "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<std::string::String> - shim(Some(std::string::String))",
             "span": null
           },
           {
             "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<std::vec::Vec<u8>> - shim(Some(std::vec::Vec<u8>))",
             "span": null
           },
           {
             "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<alloc::raw_vec::RawVec<u8>> - shim(Some(alloc::raw_vec::RawVec<u8>))",
             "span": null
           },
           {
             "def_path": "<alloc::raw_vec::RawVec<T, A> as std::ops::Drop>::drop",
+            "instance": "<alloc::raw_vec::RawVec<u8> as std::ops::Drop>::drop",
             "span": null
           },
           {
             "def_path": "alloc::raw_vec::RawVecInner::<A>::deallocate",
+            "instance": "alloc::raw_vec::RawVecInner::deallocate",
             "span": null
           },
           {
             "def_path": "<std::alloc::Global as std::alloc::Allocator>::deallocate",
+            "instance": "<std::alloc::Global as std::alloc::Allocator>::deallocate",
             "span": null
           },
           {
             "def_path": "alloc::alloc::__rust_dealloc",
+            "instance": "alloc::alloc::__rust_dealloc",
             "span": null
           }
         ]

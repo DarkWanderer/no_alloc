@@ -9,6 +9,7 @@ fn deep_report(depth: usize) -> Report {
     let chain = (0..depth)
         .map(|i| Frame {
             def_path: format!("crate_{i}::module_{i}::function_{i}"),
+            instance: format!("crate_{i}::module_{i}::function_{i}::<u32>"),
             span: Some(format!("src/lib_{i}.rs:{i}:1")),
         })
         .collect();

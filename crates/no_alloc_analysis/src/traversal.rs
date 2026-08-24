@@ -261,6 +261,11 @@ fn to_frames<'tcx>(tcx: TyCtxt<'tcx>, chain: &[(Instance<'tcx>, Span)]) -> Vec<F
         .iter()
         .map(|(instance, span)| Frame {
             def_path: tcx.def_path_str(instance.def_id()),
+            // Same rendering `diagnostics.rs` uses for its `via `{instance}``
+            // notes, so report.json's chain matches the stderr it's meant to
+            // corroborate (the whole point being a per-instantiation verdict
+            // needs the concrete type arguments, not just the definition).
+            instance: instance.to_string(),
             span: Some(tcx.sess.source_map().span_to_diagnostic_string(*span)),
         })
         .collect()

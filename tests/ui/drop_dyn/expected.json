@@ -8,22 +8,27 @@
         "chain": [
           {
             "def_path": "root",
+            "instance": "root",
             "span": null
           },
           {
             "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<std::boxed::Box<dyn Greet>> - shim(Some(std::boxed::Box<dyn Greet>))",
             "span": null
           },
           {
             "def_path": "<std::boxed::Box<T, A> as std::ops::Drop>::drop",
+            "instance": "<std::boxed::Box<dyn Greet> as std::ops::Drop>::drop",
             "span": null
           },
           {
             "def_path": "<std::alloc::Global as std::alloc::Allocator>::deallocate",
+            "instance": "<std::alloc::Global as std::alloc::Allocator>::deallocate",
             "span": null
           },
           {
             "def_path": "alloc::alloc::__rust_dealloc",
+            "instance": "alloc::alloc::__rust_dealloc",
             "span": null
           }
         ]
