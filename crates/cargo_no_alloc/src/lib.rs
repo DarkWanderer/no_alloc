@@ -8,6 +8,40 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
+// Shared with `build.rs` so the pin can't drift between the build-time
+// check (the toolchain compiling this binary) and the run-time check below
+// (the toolchain of the project being analyzed).
+include!("toolchain_spec.rs");
+
+// A cargo subcommand is expected to answer `--help`/`-h`; kept as a plain
+// string (rather than built from `Invocation`'s fields) so it reads as the
+// user-facing contract, not an implementation detail that happens to leak.
+const HELP_TEXT: &str = "\
+cargo no-alloc [OPTIONS] -- [build|test] [CARGO_ARGS...]
+
+Statically checks that #[no_alloc]-marked function instances cannot reach
+the global allocator, then runs the underlying Cargo command (`build` is
+used when [build|test] is omitted; `check` is rejected because it never
+produces the monomorphized instance graph the analysis runs on).
+
+Options:
+      --all-crates   Instrument every crate in the build (RUSTC_WRAPPER),
+                     not just workspace members (RUSTC_WORKSPACE_WRAPPER)
+      --build-std    Pass -Zbuild-std to Cargo
+      --warn-only    Report findings on stderr without failing the build
+      --root PATH    Additionally check an unannotated function by its
+                     canonical path (repeatable)
+  -h, --help         Print this help and exit
+  -V, --version      Print version information and exit";
+
+// Printed unconditionally (not just under --warn-only) because a clean exit
+// with zero roots checked is not a passing result, just an unverified one —
+// see the README's "By default only workspace members are instrumented".
+const ZERO_ROOTS_WARNING: &str = "warning: no_alloc checked 0 root instances \
+— nothing was analyzed. This usually means either no `#[no_alloc]` marker \
+was reached while building, or the marker lives in a crate outside the \
+workspace (pass --all-crates to instrument it).";
+
 const REQUIRED_RUSTFLAGS: &[&str] = &[
     "--cfg=no_alloc_check",
     "--check-cfg=cfg(no_alloc_check)",
@@ -29,7 +63,16 @@ struct Invocation {
     cargo_args: Vec<String>,
 }
 
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Invocation> {
+// `--help`/`--version` short-circuit before an `Invocation` can even be
+// formed (e.g. `--root` with no path would otherwise reject them), so they
+// need their own variants rather than boolean fields on `Invocation`.
+enum ParsedArgs {
+    Help,
+    Version,
+    Run(Invocation),
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     let mut args: Vec<_> = args.into_iter().collect();
     if !args.is_empty() {
         args.remove(0);
@@ -53,6 +96,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Invocation> {
             "--build-std" => build_std = true,
             "--all-crates" => all_crates = true,
             "--warn-only" => warn_only = true,
+            // A cargo subcommand is expected to answer these regardless of
+            // what else is on the line, so they exit before anything past
+            // this point (including "-- <bad cargo args>") is even parsed.
+            "--help" | "-h" => return Ok(ParsedArgs::Help),
+            "--version" | "-V" => return Ok(ParsedArgs::Version),
             "--root" => {
                 index += 1;
                 let root = args
@@ -104,14 +152,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Invocation> {
     }
     roots.sort();
     roots.dedup();
-    Ok(Invocation {
+    Ok(ParsedArgs::Run(Invocation {
         build_std,
         all_crates,
         warn_only,
         roots,
         command,
         cargo_args: cargo,
-    })
+    }))
 }
 
 fn host_triple() -> Result<String> {
@@ -129,6 +177,36 @@ fn host_triple() -> Result<String> {
         .context("host-tuple output is not UTF-8")?
         .trim()
         .to_owned())
+}
+
+// Checks the toolchain of the project being analyzed, mirroring build.rs's
+// compile-time check on the toolchain that built this binary. Without this,
+// a project pinned to a different toolchain (e.g. via rust-toolchain.toml)
+// resolves the wrong sysroot in `sysroot_lib_dir` below, which otherwise
+// only ever surfaces many steps later as a raw dynamic-linker error.
+// `rustc` is threaded in explicitly (rather than read from the environment
+// here) so this predicate can be unit tested against a fake rustc without
+// touching process-wide env state.
+fn verify_pinned_toolchain(rustc: &str) -> Result<()> {
+    let output = Command::new(rustc)
+        .arg("-vV")
+        .output()
+        .with_context(|| format!("failed to run `{rustc} -vV`"))?;
+    ensure!(
+        output.status.success(),
+        "`{rustc} -vV` exited with {}",
+        output.status
+    );
+    let version = String::from_utf8(output.stdout).context("rustc version is not UTF-8")?;
+    let host = version
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .context("rustc did not report a host triple")?;
+    ensure!(
+        is_pinned_toolchain(&version, host),
+        toolchain_mismatch_message(&version)
+    );
+    Ok(())
 }
 
 fn sysroot_lib_dir() -> Result<PathBuf> {
@@ -261,7 +339,25 @@ fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<Report> {
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
-    let mut inv = parse_args(args)?;
+    let mut inv = match parse_args(args)? {
+        // Neither prints anything about the pinned toolchain or spawns a
+        // build, so both work even when the active toolchain is wrong.
+        ParsedArgs::Help => {
+            println!("{HELP_TEXT}");
+            return Ok(());
+        }
+        ParsedArgs::Version => {
+            println!("cargo-no-alloc {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        ParsedArgs::Run(inv) => inv,
+    };
+    // Checked before anything else touches Cargo: a project pinned to the
+    // wrong toolchain otherwise fails much further down, in
+    // `sysroot_lib_dir`, as a raw dynamic-linker error instead of this
+    // actionable message.
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    verify_pinned_toolchain(&rustc)?;
     if env::var("NO_ALLOC_WARN_ONLY").as_deref() == Ok("1") {
         inv.warn_only = true;
     }
@@ -354,6 +450,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         "no_alloc: checked {} root instance(s), {failures} finding(s)",
         report.roots.len()
     );
+    // 0 roots is a silent-pass hazard, not a clean pass: it exits 0 and
+    // looks identical to "everything checked out" unless called out here.
+    if report.roots.is_empty() {
+        eprintln!("{ZERO_ROOTS_WARNING}");
+    }
     if !cargo_status.success() {
         bail!("Cargo exited with {cargo_status}");
     }
@@ -368,8 +469,15 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    // Every pre-existing test wants an `Invocation`; only the new
+    // help/version tests below care about the other `ParsedArgs` variants,
+    // so they call `parse_args` directly instead of going through this.
     fn parse(args: &[&str]) -> Result<Invocation> {
-        parse_args(args.iter().map(|arg| (*arg).to_owned()))
+        match parse_args(args.iter().map(|arg| (*arg).to_owned()))? {
+            ParsedArgs::Run(inv) => Ok(inv),
+            ParsedArgs::Help => bail!("expected an Invocation, got --help"),
+            ParsedArgs::Version => bail!("expected an Invocation, got --version"),
+        }
     }
 
     #[test]
@@ -477,6 +585,123 @@ mod tests {
     }
 
     #[test]
+    fn help_flag_short_and_long_are_recognized() -> Result<()> {
+        for args in [["cargo-no-alloc", "--help"], ["cargo-no-alloc", "-h"]] {
+            assert!(matches!(
+                parse_args(args.iter().map(|arg| (*arg).to_owned()))?,
+                ParsedArgs::Help
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn version_flag_short_and_long_are_recognized() -> Result<()> {
+        for args in [["cargo-no-alloc", "--version"], ["cargo-no-alloc", "-V"]] {
+            assert!(matches!(
+                parse_args(args.iter().map(|arg| (*arg).to_owned()))?,
+                ParsedArgs::Version
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn help_flag_short_circuits_before_other_argument_errors() -> Result<()> {
+        // A trailing bare `--root` (no path) would reject on its own if
+        // parsing reached it — --help must return before that happens.
+        assert!(matches!(
+            parse_args(
+                ["cargo-no-alloc", "--warn-only", "--help", "--root"]
+                    .iter()
+                    .map(|arg| (*arg).to_owned())
+            )?,
+            ParsedArgs::Help
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn help_text_documents_every_flag_parse_args_accepts() {
+        // Kept as a content check (rather than duplicating the text) so the
+        // help output can't silently drift from what `parse_args` parses.
+        for flag in [
+            "--all-crates",
+            "--build-std",
+            "--warn-only",
+            "--root",
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+            "[build|test]",
+        ] {
+            assert!(HELP_TEXT.contains(flag), "help text missing `{flag}`");
+        }
+    }
+
+    #[test]
+    fn run_prints_help_and_version_without_touching_toolchain_or_cargo() {
+        // Deliberately does not set RUSTC/CARGO to a fake: if either flag's
+        // handling fell through to the real orchestration path, this would
+        // fail by trying (and likely failing) to run the real `cargo`/`rustc`.
+        assert!(run(["cargo-no-alloc".to_owned(), "--help".to_owned()]).is_ok());
+        assert!(run(["cargo-no-alloc".to_owned(), "--version".to_owned()]).is_ok());
+    }
+
+    #[test]
+    fn zero_roots_warning_names_the_two_likely_causes() {
+        assert!(ZERO_ROOTS_WARNING.contains("--all-crates"));
+        assert!(ZERO_ROOTS_WARNING.contains("0 root instances"));
+    }
+
+    #[test]
+    fn verify_pinned_toolchain_accepts_the_pinned_version() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo_no_alloc_toolchain_ok_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory)?;
+        let fake_rustc = directory.join("rustc");
+        std::fs::write(
+            &fake_rustc,
+            "#!/bin/sh\nprintf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+        )?;
+        let mut permissions = std::fs::metadata(&fake_rustc)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_rustc, permissions)?;
+
+        let result = verify_pinned_toolchain(&fake_rustc.to_string_lossy());
+        std::fs::remove_dir_all(directory)?;
+        result
+    }
+
+    #[test]
+    fn verify_pinned_toolchain_rejects_a_mismatched_version() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo_no_alloc_toolchain_bad_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory)?;
+        let fake_rustc = directory.join("rustc");
+        std::fs::write(
+            &fake_rustc,
+            "#!/bin/sh\nprintf 'release: 1.98.0-stable\\ncommit-hash: deadbeef00\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+        )?;
+        let mut permissions = std::fs::metadata(&fake_rustc)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_rustc, permissions)?;
+
+        let error = verify_pinned_toolchain(&fake_rustc.to_string_lossy())
+            .expect_err("mismatched toolchain must be rejected");
+        assert!(error.to_string().contains("nightly-2026-08-01"));
+        std::fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[test]
     fn aggregate_ignores_non_json_and_reports_unmatched() -> Result<()> {
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_aggregate_{}_{}",
@@ -524,7 +749,10 @@ mod tests {
         let fake_rustc = directory.join("rustc");
         std::fs::write(
             &fake_rustc,
-            "#!/bin/sh\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
+            // `run` now checks `-vV` (verify_pinned_toolchain) before it
+            // ever reaches the `--print host-tuple`/`--print sysroot` calls
+            // this script already answered.
+            "#!/bin/sh\nif [ \"$1\" = \"-vV\" ]; then printf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'; exit 0; fi\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
         )?;
         let fake_cargo = directory.join("cargo");
         std::fs::write(
