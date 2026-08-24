@@ -1,10 +1,18 @@
 # no_alloc
 
+[![CI](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cargo-no-alloc.svg)](https://crates.io/crates/cargo-no-alloc)
+[![docs.rs](https://docs.rs/no_alloc_report/badge.svg)](https://docs.rs/no_alloc_report)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 `no_alloc` statically checks that selected Rust function instances cannot
 reach the global allocator. It is intentionally conservative: unresolved
 calls are rejected instead of assumed safe.
 
-The checker is currently Linux-only and tied to `nightly-2026-08-01`.
+The checker is currently Linux-only and tied to `nightly-2026-08-01`. One
+consequence: `no_alloc_analysis` requires `#![feature(rustc_private)]` and
+cannot build on docs.rs, so the docs.rs badge above points at
+`no_alloc_report` — the stable-compatible report crate — instead.
 
 ## Install and use
 
@@ -42,9 +50,11 @@ cargo no-alloc [--all-crates] [--build-std] [--warn-only]
 ```
 
 `build` is the default. `check` is rejected because it does not produce the
-monomorphized graph. The checker owns its target and target directory, so
-user-supplied `--target` and `--target-dir` are rejected. `--root` selects an
-unannotated function by canonical path across the complete build.
+monomorphized graph. `test` is accepted but is not a supported mode for
+meaningful results — see "Guarantee and limitations" below. The checker owns
+its target and target directory, so user-supplied `--target` and
+`--target-dir` are rejected. `--root` selects an unannotated function by
+canonical path across the complete build.
 
 By default only workspace members are instrumented (`RUSTC_WORKSPACE_WRAPPER`).
 A `#[no_alloc]` marker on a non-generic function in a registry or path
@@ -56,6 +66,13 @@ instrument every crate in the build (`RUSTC_WRAPPER`) instead.
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
 written to `target/no-alloc/report.json`.
+
+Every invocation runs `cargo clean` on the checker's target first, so
+**every `cargo no-alloc` run is a from-scratch rebuild**, never an
+incremental one. This is deliberate — it guarantees that a checker
+configuration change can never be hidden by Cargo's build cache (see
+[`docs/design.md`](docs/design.md)) — but it means every run pays full
+compile time, not just the cost of what changed.
 
 See [`examples/basic`](examples/basic) for a runnable example.
 
@@ -95,6 +112,14 @@ lower to an `Assert` — reject under `panic=unwind` (Rust's default); set
 `panic = "abort"` in `[profile.*]` for realistic code to pass at all. See
 [`examples/basic`](examples/basic) for the equivalent tradeoff with iterators.
 
+**`cargo no-alloc -- test` is not usable for realistic code.** Cargo ignores
+`[profile.*] panic` for the `test` profile — it always builds tests under
+`panic=unwind`, regardless of what the manifest sets — so every `Assert`
+terminator rejects under `-- test` no matter how the profile is configured.
+`-- build` is the supported mode for meaningful results; `-- test` is useful
+only for trivial, assertion-free code and is not a supported path for
+checking real workloads.
+
 Cross-crate generic roots are checked at downstream monomorphization sites.
 Per-rustc fragments are merged deterministically, and unmatched or non-function
 `--root` specifications are reported rather than silently disappearing. A
@@ -119,8 +144,8 @@ cargo audit
 
 Prepare and publish, with separate explicit authorization, in this order:
 
-1. `no_alloc_check`
-2. `no_alloc_report`
+1. `no_alloc_report`
+2. `no_alloc_check`
 3. `no_alloc_analysis`
 4. `cargo-no-alloc`
 

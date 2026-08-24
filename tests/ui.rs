@@ -53,7 +53,27 @@ fn sysroot() -> &'static str {
     })
 }
 
+/// Resolved relative to this test binary's own location first, because that
+/// is the only thing that tracks whichever target directory actually built
+/// the current run. `cargo llvm-cov` builds into `target/llvm-cov-target/`
+/// but does not export a matching `CARGO_TARGET_DIR` to the test process, so
+/// resolving from the env var alone silently picks up the stale,
+/// uninstrumented copy an earlier `cargo build --workspace` left in plain
+/// `target/debug/` — the fixtures then pass while exercising the wrong
+/// binary and contributing no coverage at all.
+///
+/// Every ancestor is searched rather than a fixed number of levels, since
+/// some sandboxes place test binaries under
+/// `target/<profile>/build/<pkg>/<hash>/out/` instead of `target/<profile>/deps/`.
 fn cargo_no_alloc_bin() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors() {
+            let candidate = ancestor.join("cargo-no-alloc");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     // `PROFILE` is only available to build scripts, not regular crates, so
     // `debug_assertions` is the standard stand-in for "debug vs release".
     let profile = if cfg!(debug_assertions) {
@@ -137,6 +157,13 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .arg("build")
         .current_dir(case_dir)
         .env_remove("NO_ALLOC_WARN_ONLY")
+        // cargo-no-alloc refuses to run when a rustc wrapper is already set,
+        // because it needs that slot for its own driver. `cargo llvm-cov`
+        // sets `RUSTC_WRAPPER` for instrumentation, which would otherwise
+        // make every fixture bail before compiling anything. `checker()`
+        // below strips these for the same reason.
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env("NO_ALLOC_LOG", "off")
         // The expected.stderr snapshot is plain text; forcing color off
         // here keeps the comparison stable regardless of the caller's own
@@ -146,6 +173,21 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
     let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr));
+
+    let report_path = target_dir.join("report.json");
+    // A bless run must never manufacture expectations from a checker that
+    // never ran. Without this guard a checker that aborts before producing a
+    // report blesses every fixture to an empty verdict set plus the abort
+    // message — which has happened: a `RUSTC_WRAPPER` collision made all 20
+    // cases bail at once and the bless silently destroyed the whole suite.
+    if bless && !report_path.is_file() {
+        return Err(format!(
+            "refusing to bless: the checker produced no {} (exit status {:?}); \
+             fix the invocation before blessing.\n--- stderr ---\n{stderr}",
+            report_path.display(),
+            output.status.code(),
+        ));
+    }
 
     let expected_stderr_path = case_dir.join("expected.stderr");
     if bless {
@@ -161,7 +203,6 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         }
     }
 
-    let report_path = target_dir.join("report.json");
     let report = if report_path.is_file() {
         let raw =
             fs::read_to_string(&report_path).map_err(|e| format!("reading report.json: {e}"))?;

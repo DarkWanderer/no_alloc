@@ -1,0 +1,108 @@
+name: "False positive?"
+description: The checker rejected (or reported a violation on) a function you believe cannot reach the allocator.
+title: "[false positive]: "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `no_alloc` is deliberately conservative: it rejects any call edge it
+        cannot statically resolve to one concrete MIR body, rather than
+        assuming it's safe (see
+        [ADR 0003](https://github.com/DarkWanderer/no_alloc/blob/main/adr/0003-reject-unresolved-edges.md)).
+        A rejection caused by one of these is **documented, intended
+        behavior**, not a bug:
+
+        - a call through a function pointer
+        - `dyn` virtual dispatch
+        - inline assembly
+        - a foreign or otherwise MIR-less callee
+        - an `Assert` terminator under `panic=unwind` (indexing, arithmetic
+          overflow checks, etc. in a debug build — see README's "Guarantee
+          and limitations")
+
+        Please check the `reason` in your `report.json` entry against this
+        list before filing. If you're not sure, file anyway and say so — the
+        fields below are what let us tell the two cases apart quickly.
+
+  - type: checkboxes
+    id: screened
+    attributes:
+      label: Self-screen
+      options:
+        - label: >-
+            I checked the `reason` in my report and it does not match one of
+            the documented exclusions above (function pointer, `dyn`
+            dispatch, inline asm, MIR-less callee, or `Assert` under
+            `panic=unwind`) — or I'm not sure and am flagging that below.
+          required: true
+
+  - type: textarea
+    id: invocation
+    attributes:
+      label: Exact `cargo no-alloc` invocation
+      description: Full command line, including flags, as run.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: verdict
+    attributes:
+      label: "`Verdict` and `reason` from `target/no-alloc/report.json`"
+      description: >-
+        Paste the `RootVerdict` entry for the affected root — `verdict.kind`,
+        the full `chain`, and (for `rejected`) the `reason` string.
+      render: json
+    validations:
+      required: true
+
+  - type: dropdown
+    id: panic-strategy
+    attributes:
+      label: Panic strategy in effect
+      description: >-
+        The `panic` setting under `[profile.*]` for the profile you built
+        with — check your manifest, don't guess. "unwind" is Rust's default
+        when the setting is absent.
+      options:
+        - "abort"
+        - "unwind (default, unset)"
+        - "not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: marker-location
+    attributes:
+      label: Where is the `#[no_alloc]` marker?
+      description: >-
+        Whether the marked function is inside your workspace or in a
+        dependency changes which crates get instrumented — see README's
+        `--all-crates` section. A marker outside the workspace, built
+        without `--all-crates`, is silently never analyzed rather than
+        rejected, which can look like a different problem.
+      options:
+        - Inside the workspace
+        - In a registry/path dependency, built with --all-crates
+        - In a registry/path dependency, NOT using --all-crates
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >-
+        The smallest function (and the callees it reaches) that reproduces
+        the rejection. A full toy crate is even more useful, in the shape of
+        `examples/basic` or `tests/ui/<case>/`.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else

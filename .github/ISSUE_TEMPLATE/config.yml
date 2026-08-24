@@ -1,0 +1,9 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Suspected soundness bug (checker PASSES code that actually allocates)
+    url: https://github.com/DarkWanderer/no_alloc/security/advisories/new
+    about: >-
+      Report this privately per SECURITY.md instead of opening a public
+      issue — a case where the checker wrongly clears an allocating root is
+      the one class of bug that needs coordinated disclosure rather than a
+      public tracker entry.

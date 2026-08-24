@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in the checker itself is broken — a crash, a build failure, an unexpected panic, a malformed report.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the checker *rejected* code you believe is allocation-free, use
+        the "False positive?" template instead — it asks for the specific
+        fields that separate a real bug from a documented scope exclusion.
+
+        If you suspect the checker *passed* code that actually allocates,
+        please report that privately through the process in
+        [SECURITY.md](https://github.com/DarkWanderer/no_alloc/blob/main/SECURITY.md)
+        rather than filing a public issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: invocation
+    attributes:
+      label: Exact `cargo no-alloc` invocation
+      description: Full command line, including flags, as run.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: rustc-vv
+    attributes:
+      label: "`rustc -vV` output"
+      description: >-
+        Run `rustc +nightly-2026-08-01 -vV` (substitute whatever toolchain
+        you invoked with). The checker is pinned to `nightly-2026-08-01`
+        exactly; a toolchain mismatch is the most common cause of unexpected
+        failures and is easy to rule out with this.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Relevant excerpt of `target/no-alloc/report.json`
+      description: The `RootVerdict` entry (or entries) involved, and any `selection_errors`. Leave blank if the report was never produced.
+      render: json
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A small crate or snippet that reproduces the issue, if you can share one.
+      render: rust
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else

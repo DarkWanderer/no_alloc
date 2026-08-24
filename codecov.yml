@@ -1,0 +1,19 @@
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+ignore:
+  - "tests/"
+  - "benches/"
+  - "examples/"
+  # RUSTC_WRAPPER conflict between cargo-llvm-cov and cargo-no-alloc's own
+  # driver-injection mechanism means this crate cannot currently be
+  # instrumented via the ui_matrix test suite (see ci.yml). Counting it as
+  # 0% would make the project total permanently and misleadingly low for a
+  # reason unrelated to actual test coverage.
+  - "crates/no_alloc_analysis/"

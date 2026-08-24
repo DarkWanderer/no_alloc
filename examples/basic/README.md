@@ -2,7 +2,8 @@
 
 A minimal crate demonstrating `no_alloc` on two functions:
 
-- `safe_sum` — an index-based loop over a slice. Passes.
+- `safe_sum` — destructures a fixed-size array (`let [a, b, c] = *buf;`) and
+  sums the elements. Passes.
 - `unsafe_alloc` — calls `Box::new`. Flagged as a violation, with the full
   call chain down to the allocator.
 
@@ -18,7 +19,7 @@ for `unsafe_alloc`, and no error for `safe_sum`.
 
 ## Note on iterators
 
-Writing `safe_sum` as `for &x in buf { ... }` instead of the index-based loop
+Writing `safe_sum` as `for &x in buf { ... }` instead of the array destructure
 above makes it *rejected* rather than pass: in debug builds, the slice
 iterator's `next()` goes through an `unchecked_sub` precondition check that
 has no statically available MIR body. The tool follows "reject, don't

@@ -6,8 +6,8 @@ immediately before publishing.
 
 Package and publish in dependency order:
 
-1. `no_alloc_check`
-2. `no_alloc_report`
+1. `no_alloc_report`
+2. `no_alloc_check`
 3. `no_alloc_analysis`
 4. `cargo-no-alloc`
 
