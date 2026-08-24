@@ -9,6 +9,10 @@ use anyhow::{bail, ensure, Context};
 use std::path::Path;
 use std::process::Command;
 
+// Shared with `src/lib.rs` so the pin can't drift between the build-time
+// check (this file) and the run-time check (the project being analyzed).
+include!("src/toolchain_spec.rs");
+
 fn main() -> anyhow::Result<()> {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
     let version = Command::new(&rustc)
@@ -26,10 +30,8 @@ fn main() -> anyhow::Result<()> {
         .find_map(|line| line.strip_prefix("host: "))
         .context("rustc did not report a host triple")?;
     ensure!(
-        version.contains("release: 1.99.0-nightly")
-            && version.contains("commit-hash: ad3d0bc14")
-            && host.contains("linux"),
-        "cargo-no-alloc requires exactly nightly-2026-08-01 on Linux; found:\n{version}"
+        is_pinned_toolchain(&version, host),
+        toolchain_mismatch_message(&version)
     );
 
     let output = Command::new(&rustc)
@@ -70,5 +72,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("cargo::rerun-if-changed=build.rs");
+    // include!()'d above, so a change here must also invalidate this script.
+    println!("cargo::rerun-if-changed=src/toolchain_spec.rs");
     Ok(())
 }
