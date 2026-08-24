@@ -15,32 +15,32 @@ note: via `std::vec::Vec::<i32>::push`
    5 |         v.push(1);
      |         ^^^^^^^^^
 note: via `std::vec::Vec::<i32>::push_mut`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:996:17
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:996:17
      |
  996 |         let _ = self.push_mut(value);
      |                 ^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVec::<i32>::grow_one`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:1033:13
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:1033:13
      |
 1033 |             self.buf.grow_one();
      |             ^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::grow_amortized`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:493:36
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:493:36
      |
  493 |         if let Err(err) = unsafe { self.grow_amortized(self.cap.as_inner(), 1, elem_layout) } {
      |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::finish_grow`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:529:28
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:529:28
      |
  529 |         let ptr = unsafe { self.finish_grow(cap, elem_layout)? };
      |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `<std::alloc::Global as std::alloc::Allocator>::allocate`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:560:13
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:560:13
      |
  560 |             self.alloc.allocate(new_layout)
      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::alloc::Global::alloc_impl_runtime`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
      |
  418 | /         core::intrinsics::const_eval_select(
  419 | |             (layout, zeroed),
@@ -49,7 +49,7 @@ note: via `std::alloc::Global::alloc_impl_runtime`
  422 | |         )
      | |_________^
 note: via `alloc::alloc::__rust_alloc_zeroed`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
      |
  284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

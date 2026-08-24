@@ -15,12 +15,12 @@ note: via `<std::slice::Iter<'_, u32> as std::iter::Iterator>::next`
    9 |     for &x in buf {
      |               ^^^
 note: via `core::num::<impl usize>::unchecked_sub::precondition_check`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ub_checks.rs:78:17
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:78:17
      |
   78 |                   precondition_check($($arg,)*);
      |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
-    ::: /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
      |
 1449 | /     uint_impl! {
 1450 | |         Self = usize,
@@ -31,12 +31,12 @@ note: via `core::num::<impl usize>::unchecked_sub::precondition_check`
 1473 | |     }
      | |_____- in this macro invocation
 note: via `core::panicking::panic_nounwind_fmt`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ub_checks.rs:73:21
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:73:21
      |
   73 |                       ::core::panicking::panic_nounwind_fmt(::core::fmt::Arguments::from_str(msg), false);
      |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
-    ::: /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
      |
 1449 | /     uint_impl! {
 1450 | |         Self = usize,

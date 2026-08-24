@@ -26,45 +26,45 @@ note: via `std::ptr::drop_glue::<Holder> - shim(Some(Holder))`
   6 | }
     | ^
 note: via `std::ptr::drop_glue::<std::string::String> - shim(Some(std::string::String))`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
     |
 828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
 829 | | where
 830 | |     T: [const] Destruct,
     | |________________________^
 note: via `std::ptr::drop_glue::<std::vec::Vec<u8>> - shim(Some(std::vec::Vec<u8>))`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
     |
 828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
 829 | | where
 830 | |     T: [const] Destruct,
     | |________________________^
 note: via `std::ptr::drop_glue::<alloc::raw_vec::RawVec<u8>> - shim(Some(alloc::raw_vec::RawVec<u8>))`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
     |
 828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
 829 | | where
 830 | |     T: [const] Destruct,
     | |________________________^
 note: via `<alloc::raw_vec::RawVec<u8> as std::ops::Drop>::drop`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
     |
 828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
 829 | | where
 830 | |     T: [const] Destruct,
     | |________________________^
 note: via `alloc::raw_vec::RawVecInner::deallocate`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:425:18
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:425:18
     |
 425 |         unsafe { self.inner.deallocate(T::LAYOUT) }
     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `<std::alloc::Global as std::alloc::Allocator>::deallocate`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:876:17
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:876:17
     |
 876 |                 self.alloc.deallocate(ptr, layout);
     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::alloc::__rust_dealloc`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:169:14
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:169:14
     |
 169 |     unsafe { __rust_dealloc(ptr, layout.size(), layout.alignment()) }
     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

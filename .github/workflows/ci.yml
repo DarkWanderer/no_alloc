@@ -21,8 +21,12 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo install cargo-llvm-cov --version 0.8.7 --locked
-      - run: cargo llvm-cov --workspace --summary-only -- --skip ui_matrix
-      - run: cargo llvm-cov -p cargo-no-alloc --lib --summary-only
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info -- --skip ui_matrix
+      - run: cargo llvm-cov -p cargo-no-alloc --lib --lcov --output-path lcov-driver.info
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: lcov.info,lcov-driver.info
+          fail_ci_if_error: false
       - run: cargo bench --no-run
       - run: cargo install cargo-audit --locked
       - run: cargo audit

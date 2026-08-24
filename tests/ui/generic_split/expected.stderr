@@ -20,12 +20,12 @@ note: via `std::boxed::Box::<i32>::new`
   8 |         *Box::new(x)
     |          ^^^^^^^^^^^
 note: via `std::boxed::box_new_uninit`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
     |
 290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::alloc::Global::alloc_impl_runtime`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
     |
 418 | /         core::intrinsics::const_eval_select(
 419 | |             (layout, zeroed),
@@ -34,7 +34,7 @@ note: via `std::alloc::Global::alloc_impl_runtime`
 422 | |         )
     | |_________^
 note: via `alloc::alloc::__rust_alloc_zeroed`
-   --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
     |
 284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

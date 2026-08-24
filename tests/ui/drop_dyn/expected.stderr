@@ -15,19 +15,19 @@ note: via `std::ptr::drop_glue::<std::boxed::Box<dyn Greet>> - shim(Some(std::bo
   15 | }
      | ^
 note: via `<std::boxed::Box<dyn Greet> as std::ops::Drop>::drop`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:828:1
      |
  828 | / pub(crate) const unsafe fn drop_glue<T: PointeeSized>(_: &mut T)
  829 | | where
  830 | |     T: [const] Destruct,
      | |________________________^
 note: via `<std::alloc::Global as std::alloc::Allocator>::deallocate`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1995:17
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:1995:17
      |
 1995 |                 self.1.deallocate(From::from(ptr.cast()), layout);
      |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::alloc::__rust_dealloc`
-    --> /home/dw/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:169:14
+    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:169:14
      |
  169 |     unsafe { __rust_dealloc(ptr, layout.size(), layout.alignment()) }
      |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
