@@ -149,6 +149,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `true` even though the process producing it exited nonzero. A tool
   reading the JSON directly, rather than this process's exit code, would
   have seen a false success.
+- Documented (ADR 0006) why a workspace build script or proc-macro reporting
+  `unwind` while everything else reports `immediate_abort` in the same
+  build is not a soundness gap: Cargo always compiles host artifacts under
+  `unwind` regardless of `--immediate-abort`, and `unwind` is the *stricter*
+  of the two as far as the traversal is concerned (`Assert` rejects
+  outright rather than taking the `abort`/`immediate-abort` carve-out). A
+  rejecting or violating host root fails that unit's own compilation
+  outright — via the same hard-error mechanism ordinary findings use — so
+  it can never coexist with a successful build; only a genuinely passing
+  one can, and that verdict is never weaker than the target's. Pinned by
+  `tests/ui/immediate_abort_host_root`.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

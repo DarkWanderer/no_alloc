@@ -132,3 +132,42 @@ program's behaviour under its *own* panic strategy: a crate that ships with
 `panic = "unwind"` and is checked with `--immediate-abort` has been checked
 as compiled for that run, and its shipped binary still has a panic runtime
 that allocates.
+
+### Host units always compile under `unwind`, and that is not a gap
+
+A workspace member's build script or proc-macro is a *host* artifact: Cargo
+compiles it to run during the build itself, and — independently of
+`[profile.*] panic` and of `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, both of
+which apply only to the *target* platform once `--target` is explicit —
+always compiles it under the default `unwind` strategy. Verified directly:
+a `#[no_alloc]`-marked function placed in `build.rs` reports
+`panic_strategy: unwind` for its own fragment whether or not the checked
+crate sets `[profile.dev] panic = "abort"`, and whether or not the checker
+run passes `--immediate-abort`. `Report::merge` (`no_alloc_report/src/report.rs`)
+correctly reports the whole build's `panic_strategy` as `None` in that case,
+since the fragments genuinely disagree; that `None` is the honest answer,
+not a bug to route around.
+
+It is tempting to read that disagreement as the host root's verdict having
+used a weaker, unproven carve-out that the "no carve-out" guarantee above
+promised to eliminate. It has not: `unwind` is the *strictest* of the three
+panic strategies as far as this traversal is concerned. Its `Assert`
+handling is `TerminatorKind::Assert { .. } if tcx.sess.panic_strategy().unwinds() => Unresolved(..)`
+— a hard rejection, never the `Edge::None` carve-out `abort` and
+`immediate-abort` both give that terminator. So a host root that reaches a
+`Pass` under `unwind` has been proven not to reach *any* assert-adjacent
+panic machinery at all, which is at least as strong a claim as a `Pass`
+under either other strategy, never weaker. The remaining terminals —
+`UnwindResume`, `UnwindTerminate`, `Unreachable` — are `Edge::None`
+unconditionally in `classify_terminator`, with no strategy check at all
+(ADR 0003); that scope exclusion is identical in every mode, including the
+target crate's own `--immediate-abort`-checked code, so a host root reaching
+one is not weaker than a target root reaching the same terminator under
+immediate-abort — it is the same, pre-existing, documented exclusion.
+
+So: a mixed host/target `panic_strategy` in one build never hides an
+unsound verdict on either side. What it costs is transparency — the merged
+report can say only "unknown" about the run as a whole, not "here is what
+each root was actually checked under." A per-root or per-fragment strategy
+field in `report.json` would recover that, at the cost of a schema change;
+not implemented here, since nothing unsound depends on it.

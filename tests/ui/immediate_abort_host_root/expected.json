@@ -1,0 +1,18 @@
+{
+  "roots": [
+    {
+      "root": "build_script_build::host_trivial",
+      "instance": "host_trivial",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "immediate_abort_host_root::target_trivial",
+      "instance": "target_trivial",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}
