@@ -78,6 +78,19 @@ pub struct ReportFragment {
 }
 
 impl Report {
+    /// Whether at least one root in this report was actually checked — that
+    /// is, has a verdict other than `NotInstantiated`. Used to decide
+    /// whether a report has anything to say about the panic strategy it was
+    /// compiled under: a fragment holding only `NotInstantiated` markers (a
+    /// cross-crate generic's defining crate, or a wrapped host unit that
+    /// merely rediscovered an uninstantiated root) checked nothing, so it
+    /// cannot confirm or contradict a sibling's claim either way.
+    pub fn checked_an_instance(&self) -> bool {
+        self.roots
+            .iter()
+            .any(|root| !matches!(root.verdict, Verdict::NotInstantiated))
+    }
+
     pub fn is_success(&self) -> bool {
         self.selection_errors.is_empty()
             && self
@@ -104,11 +117,7 @@ impl Report {
         // such a fragment in the defining crate on every ordinary build.
         let mut unknown_over_verdicts = false;
         for report in reports {
-            let checked_something = report
-                .roots
-                .iter()
-                .any(|root| !matches!(root.verdict, Verdict::NotInstantiated));
-            if report.panic_strategy.is_none() && checked_something {
+            if report.panic_strategy.is_none() && report.checked_an_instance() {
                 unknown_over_verdicts = true;
             }
             merged.roots.extend(report.roots);
@@ -271,6 +280,29 @@ mod tests {
     /// One build compiles everything with one panic strategy, so the merged
     /// report can state it. Anything else is "unknown" rather than a guess:
     /// a `Pass` read back later means different things per strategy.
+    #[test]
+    fn checked_an_instance_ignores_not_instantiated_markers() {
+        let checked = Report {
+            roots: vec![RootVerdict {
+                root: "a".into(),
+                instance: "a".into(),
+                verdict: Verdict::Pass,
+            }],
+            ..Report::default()
+        };
+        assert!(checked.checked_an_instance());
+        let only_markers = Report {
+            roots: vec![RootVerdict {
+                root: "dependency::root".into(),
+                instance: "dependency::root".into(),
+                verdict: Verdict::NotInstantiated,
+            }],
+            ..Report::default()
+        };
+        assert!(!only_markers.checked_an_instance());
+        assert!(!Report::default().checked_an_instance());
+    }
+
     #[test]
     fn merge_keeps_an_agreed_panic_strategy_and_drops_a_disagreement() {
         let with = |strategy| Report {

@@ -62,18 +62,31 @@ Two guards keep the mode from silently mixing an immediate-abort crate with
 a sysroot that was not rebuilt to match, which would make the report claim
 a guarantee the build did not earn. Pre-flight, `cargo no-alloc` rejects
 `-Cpanic=immediate-abort` arriving through the ambient environment
-(`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, in any spelling rustc accepts)
-without `--immediate-abort`, and rejects a test-harness target selection
-(`--tests`, `--all-targets`, and `-- test` itself) under `--immediate-abort`
-before paying for a sysroot rebuild rustc would refuse anyway
-(`building tests with panic=abort is not supported without
--Zpanic_abort_tests`). Neither guard can see every route the strategy might
-take — the manifest, `config.toml`, or a narrow `--test`/`--bench` selection
-none of which show up in an environment variable — so after the build,
-`cargo no-alloc` also checks what the driver actually observed: an
-`ImmediateAbort` report without `--build-std` is rejected, since
-`--build-std` is what makes an otherwise hand-set strategy coherent (it
-rebuilds the sysroot under the same flags the crate itself used).
+(`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, in any spelling rustc accepts,
+resolved by the *last* `-C panic=...` in the stream since that is the one
+rustc uses) without `--immediate-abort`, and rejects a test-harness target
+selection (`--tests`, `--all-targets`, and `-- test` itself) under
+`--immediate-abort` before paying for a sysroot rebuild rustc would refuse
+anyway (`building tests with panic=abort is not supported without
+-Zpanic_abort_tests`). `--test`/`--bench`/`--benches` are deliberately not
+in that list — they name or filter to a target that may set
+`harness = false` and build fine, and telling those apart would need this
+wrapper to parse Cargo's own target metadata, which it does nowhere else.
+
+Neither pre-flight guard can see every route the strategy might take — the
+manifest, `config.toml`, or a narrow `--test`/`--bench` selection, none of
+which show up in an environment variable — so after the build,
+`cargo no-alloc` also checks what the driver actually observed: any
+verdict-bearing fragment reporting `ImmediateAbort` without `--build-std` is
+rejected, since `--build-std` is what makes an otherwise hand-set strategy
+coherent (it rebuilds the sysroot under the same flags the crate itself
+used). This check reads the raw fragments directly rather than the merged
+report's `panic_strategy` — a target-specific config can select the
+strategy for the checked crate while a wrapped host unit (a build script
+with a checked root of its own) compiles under something else, and that
+disagreement is exactly the case `Report::merge` reports as `None` for
+`report.json`'s sake. Using the merged field here would let the mix through
+silently; checking every fragment does not.
 
 ## Consequences
 

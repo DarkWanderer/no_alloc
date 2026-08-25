@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inherits the sibling's still-open write fd, and the exec fails with
   `ETXTBSY`, so whichever test lost reported a spawn error instead of the
   verdict it asserts on. Reproduced at roughly one run in two.
+- `immediate_abort_rustflags_are_added_only_when_asked_for` now clears and
+  restores `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` under the same lock as the
+  test above, instead of reading whatever the process environment happened
+  to hold. It was reading ambient state unguarded, so a developer's own
+  shell (or the sibling test's transient mutation) could leak in and fail
+  its "unasked-for" assertions spuriously.
 - `tests/ui.rs` also strips `RUST_BACKTRACE` and `RUST_LIB_BACKTRACE`, which
   otherwise appended anyhow's machine-specific backtrace to every fixture's
   stderr snapshot and failed the whole matrix on developer machines that
@@ -115,7 +121,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manifest (`cargo-features = ["panic-immediate-abort"]` plus a profile),
   `config.toml`, or a narrow `--test`/`--bench` selection.
   `--build-std` on its own is accepted: it rebuilds the sysroot under the
-  same flags, so a hand-set strategy is coherent.
+  same flags, so a hand-set strategy is coherent. This check reads every
+  fragment directly rather than the merged report's `panic_strategy`: a
+  target-specific config can select the strategy for the checked crate
+  while a wrapped host unit compiles under something else, and
+  `Report::merge` reports that disagreement as unknown for `report.json`'s
+  sake — which would otherwise let the same mix through this guard.
+- `declares_immediate_abort` (the ambient-flag guard) now resolves the
+  *last* `-C panic=...` setting in the flag stream, matching rustc's
+  last-wins behavior, instead of flagging the environment as soon as
+  `immediate-abort` appears anywhere. An environment ending in
+  `-Cpanic=unwind` after an earlier `-Cpanic=immediate-abort` compiles
+  under `unwind` and was being rejected for a strategy that was not
+  actually in effect.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.
