@@ -96,6 +96,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a future `sqrt_f32` or `round_ties_evenf64` would have been accepted
   without anyone auditing its lowering, which is not what an allowlist is
   for. All 99 float names in the pinned toolchain still match.
+- The checker's own `-Cpanic=immediate-abort` flag is now appended
+  unconditionally rather than skipped when an equal flag already appears
+  somewhere earlier. `-Cpanic` is last-wins, so an inherited
+  `-Cpanic=immediate-abort ... -Cpanic=unwind` used to satisfy the
+  "already present" test while the build still ran under unwind, silently
+  not applying `--immediate-abort` at all.
+- `--immediate-abort`'s test-harness-target guard no longer rejects
+  `--test`/`--bench`/`--benches`: those name a target that may set
+  `harness = false` (as this repository's own benchmarks do) and build
+  fine under an abort strategy. Only `--tests` and `--all-targets`, which
+  always pull in a libtest harness, are still rejected pre-flight; a
+  narrower selection that does need a harness is caught by the
+  observed-strategy check below instead.
+- `cargo no-alloc` also rejects a build whose driver reported compiling
+  under `-Cpanic=immediate-abort` without `--build-std` — the case the
+  ambient-flag guard cannot see because the strategy came from the
+  manifest (`cargo-features = ["panic-immediate-abort"]` plus a profile),
+  `config.toml`, or a narrow `--test`/`--bench` selection.
+  `--build-std` on its own is accepted: it rebuilds the sysroot under the
+  same flags, so a hand-set strategy is coherent.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

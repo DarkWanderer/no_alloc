@@ -58,6 +58,23 @@ nightly-only and would break the crate's ordinary stable build — exactly the
 footprint ADR 0002 exists to avoid. `tests/ui/iterator_immediate_abort` is
 therefore a fixture with an entirely ordinary manifest.
 
+Two guards keep the mode from silently mixing an immediate-abort crate with
+a sysroot that was not rebuilt to match, which would make the report claim
+a guarantee the build did not earn. Pre-flight, `cargo no-alloc` rejects
+`-Cpanic=immediate-abort` arriving through the ambient environment
+(`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, in any spelling rustc accepts)
+without `--immediate-abort`, and rejects a test-harness target selection
+(`--tests`, `--all-targets`, and `-- test` itself) under `--immediate-abort`
+before paying for a sysroot rebuild rustc would refuse anyway
+(`building tests with panic=abort is not supported without
+-Zpanic_abort_tests`). Neither guard can see every route the strategy might
+take — the manifest, `config.toml`, or a narrow `--test`/`--bench` selection
+none of which show up in an environment variable — so after the build,
+`cargo no-alloc` also checks what the driver actually observed: an
+`ImmediateAbort` report without `--build-std` is rejected, since
+`--build-std` is what makes an otherwise hand-set strategy coherent (it
+rebuilds the sysroot under the same flags the crate itself used).
+
 ## Consequences
 
 `--immediate-abort` is the mode in which realistic code can be checked, and
