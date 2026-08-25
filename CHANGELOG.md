@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/ui.rs` strips inherited `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER`
   before invoking the checker, and resolves the built binary relative to the
   test executable rather than trusting `CARGO_TARGET_DIR`.
+- The `cargo_no_alloc` tests that write a fake `rustc` and then execute it
+  are serialized. Run in parallel they raced: one test's `Command::spawn`
+  inherits the sibling's still-open write fd, and the exec fails with
+  `ETXTBSY`, so whichever test lost reported a spawn error instead of the
+  verdict it asserts on. Reproduced at roughly one run in two.
 - `tests/ui.rs` also strips `RUST_BACKTRACE` and `RUST_LIB_BACKTRACE`, which
   otherwise appended anyhow's machine-specific backtrace to every fixture's
   stderr snapshot and failed the whole matrix on developer machines that
@@ -74,7 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than borrowing a sibling's, so `merge` is associative, while fragments
   holding only markers stay neutral.
 - `cargo no-alloc` rejects an environment that already sets
-  `-Cpanic=immediate-abort` without `--immediate-abort`. Nothing rebuilds
+  `-Cpanic=immediate-abort` without `--immediate-abort`, in any spelling
+  rustc accepts (`-Cpanic=…`, `-C panic=…`, `--codegen …`, in either flag
+  variable). Nothing rebuilds
   the sysroot in that configuration, so the crate compiled under
   immediate-abort while std kept its precompiled panic runtime, and the
   report claimed `immediate_abort` for a build where std's panic paths were

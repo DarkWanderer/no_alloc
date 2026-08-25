@@ -310,19 +310,34 @@ fn find_driver() -> Result<PathBuf> {
 /// strategy. Split out from the environment so it can be tested directly:
 /// `CARGO_ENCODED_RUSTFLAGS` is `\x1f`-separated and takes precedence over
 /// `RUSTFLAGS`, exactly as Cargo reads them.
+///
+/// `rustc -C help` documents `-C panic=val`, so the strategy can arrive as
+/// one token (`-Cpanic=immediate-abort`) or as two adjacent ones (`-C`
+/// followed by `panic=immediate-abort`), in either variable and with
+/// `--codegen` spelled out. All of those reach rustc identically, so all of
+/// them have to be recognized here — matching only the joined spelling let
+/// the two-token form through, which is how this was found.
 fn declares_immediate_abort(encoded: Option<&str>, plain: Option<&str>) -> bool {
-    let selects = |flag: &str| {
-        matches!(
-            flag,
-            "-Cpanic=immediate-abort"
-                | "-C panic=immediate-abort"
-                | "--codegen=panic=immediate-abort"
-        )
+    const SELECTED: &str = "panic=immediate-abort";
+    let raw: Vec<&str> = match encoded {
+        Some(encoded) => encoded.split('\x1f').collect(),
+        None => plain.unwrap_or_default().split_whitespace().collect(),
     };
-    match encoded {
-        Some(encoded) => encoded.split('\x1f').any(selects),
-        None => plain.is_some_and(|plain| plain.split_whitespace().any(selects)),
-    }
+    // An encoded entry can itself carry the space, so flatten before pairing
+    // rather than trusting the separator to have split every token.
+    let tokens: Vec<&str> = raw
+        .iter()
+        .flat_map(|token| token.split_whitespace())
+        .collect();
+    tokens.iter().enumerate().any(|(index, token)| {
+        let joined = token
+            .strip_prefix("-C")
+            .or_else(|| token.strip_prefix("--codegen"))
+            .is_some_and(|rest| rest.trim_start_matches('=') == SELECTED);
+        let adjacent = matches!(*token, "-C" | "--codegen")
+            && tokens.get(index + 1).is_some_and(|next| *next == SELECTED);
+        joined || adjacent
+    })
 }
 
 fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
@@ -559,6 +574,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Serializes the tests that write a fake `rustc` and then execute it.
+    ///
+    /// Writing an executable and running it is not thread-safe against a
+    /// *sibling* doing the same: the other test's `Command::spawn` inherits
+    /// the still-open write fd, and the exec then fails with `ETXTBSY`
+    /// ("Text file busy"). It reproduced about half the time here, as
+    /// whichever test lost the race failing with a spawn error instead of
+    /// the verdict it asserts on.
+    static FAKE_RUSTC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
@@ -753,12 +778,39 @@ mod tests {
         assert!(!declares_immediate_abort(None, Some("-Cpanic=abort")));
         assert!(!declares_immediate_abort(None, Some("-Cpanic=unwind")));
         assert!(!declares_immediate_abort(None, None));
-        // A space-separated `-C panic=...` survives only in the plain form,
-        // where Cargo splits on whitespace; the encoded form keeps it whole.
-        assert!(declares_immediate_abort(
-            Some("-C panic=immediate-abort"),
-            None
-        ));
+    }
+
+    /// `-C panic=val` is a documented spelling, and it reaches rustc the
+    /// same way the joined one does — as two adjacent arguments in either
+    /// variable, or as one encoded entry containing the space. Matching only
+    /// `-Cpanic=…` let every split form through.
+    #[test]
+    fn ambient_immediate_abort_is_recognized_when_the_flag_is_split() {
+        for plain in [
+            "-Zunstable-options -C panic=immediate-abort",
+            "-C panic=immediate-abort",
+            "--codegen panic=immediate-abort",
+            "--codegen=panic=immediate-abort",
+        ] {
+            assert!(declares_immediate_abort(None, Some(plain)), "{plain}");
+        }
+        for encoded in [
+            "-Zunstable-options\u{1f}-C\u{1f}panic=immediate-abort",
+            "-C panic=immediate-abort",
+            "--codegen\u{1f}panic=immediate-abort",
+        ] {
+            assert!(declares_immediate_abort(Some(encoded), None), "{encoded}");
+        }
+        // A dangling `-C`, or one whose value is a different strategy, is not
+        // a match — including when the next token merely looks similar.
+        for plain in [
+            "-C",
+            "-C panic=abort",
+            "-C opt-level=3 panic=immediate-abort-ish",
+            "--codegen debuginfo=2",
+        ] {
+            assert!(!declares_immediate_abort(None, Some(plain)), "{plain}");
+        }
     }
 
     #[test]
@@ -884,6 +936,9 @@ mod tests {
 
     #[test]
     fn verify_pinned_toolchain_accepts_the_pinned_version() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_toolchain_ok_{}_{}",
             std::process::id(),
@@ -906,6 +961,9 @@ mod tests {
 
     #[test]
     fn verify_pinned_toolchain_rejects_a_mismatched_version() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_toolchain_bad_{}_{}",
             std::process::id(),
@@ -967,6 +1025,12 @@ mod tests {
 
     #[test]
     fn orchestration_runs_with_fake_cargo_and_rustc() -> Result<()> {
+        // Also writes executables and runs them, so it shares the lock (see
+        // `FAKE_RUSTC`) as well as being the only test that mutates the
+        // process environment.
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_orchestration_{}_{}",
             std::process::id(),
