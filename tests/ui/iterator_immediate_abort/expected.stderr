@@ -1,0 +1,38 @@
+error: no_alloc: this function has an unresolved call (callee is a function pointer, not a statically resolvable body)
+    --> src/main.rs:54:1
+     |
+  54 | fn sorted(buf: &mut [u32]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: via `sorted`
+    --> src/main.rs:54:1
+     |
+  54 | fn sorted(buf: &mut [u32]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `core::slice::<impl [u32]>::sort_unstable`
+    --> src/main.rs:55:5
+     |
+  55 |     buf.sort_unstable();
+     |     ^^^^^^^^^^^^^^^^^^^
+note: via `core::slice::sort::unstable::sort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/mod.rs:3152:9
+     |
+3152 |         sort::unstable::sort(self, &mut T::lt);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `core::slice::sort::unstable::ipnsort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/sort/unstable/mod.rs:55:13
+     |
+  55 |             ipnsort(v, is_less);
+     |             ^^^^^^^^^^^^^^^^^^^
+note: via `core::slice::sort::unstable::quicksort::quicksort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/sort/unstable/mod.rs:137:5
+     |
+ 137 |     crate::slice::sort::unstable::quicksort::quicksort(v, None, limit, is_less);
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `core::slice::sort::unstable::quicksort::partition::<u32, {closure@core::slice::sort::unstable::quicksort::quicksort<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>::{closure#0}}>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/sort/unstable/quicksort.rs:52:30
+     |
+  52 |                 let num_lt = partition(v, pivot_pos, &mut |a, b| !is_less(b, a));
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `iterator_immediate_abort` (bin "iterator_immediate_abort") due to 1 previous error

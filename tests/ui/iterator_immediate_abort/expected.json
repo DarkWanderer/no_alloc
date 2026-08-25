@@ -1,0 +1,72 @@
+{
+  "roots": [
+    {
+      "root": "iterator_immediate_abort::dot",
+      "instance": "dot",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "iterator_immediate_abort::largest",
+      "instance": "largest",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "iterator_immediate_abort::sorted",
+      "instance": "sorted",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "sorted",
+            "instance": "sorted",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::<impl [T]>::sort_unstable",
+            "instance": "core::slice::<impl [u32]>::sort_unstable",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::sort",
+            "instance": "core::slice::sort::unstable::sort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::ipnsort",
+            "instance": "core::slice::sort::unstable::ipnsort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::quicksort::quicksort",
+            "instance": "core::slice::sort::unstable::quicksort::quicksort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::quicksort::partition",
+            "instance": "core::slice::sort::unstable::quicksort::partition::<u32, {closure@core::slice::sort::unstable::quicksort::quicksort<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>::{closure#0}}>",
+            "span": null
+          }
+        ],
+        "reason": "callee is a function pointer, not a statically resolvable body"
+      }
+    },
+    {
+      "root": "iterator_immediate_abort::sum_loop",
+      "instance": "sum_loop",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "iterator_immediate_abort::windowed",
+      "instance": "windowed",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

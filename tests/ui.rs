@@ -14,6 +14,10 @@
 //!   snapshot is portable. Re-bless with `NO_ALLOC_BLESS=1` when the
 //!   toolchain changes and the rendered diagnostics genuinely differ.
 //!
+//! A case may also carry a `checker-args` file — checker flags, one per
+//! line, prepended to the invocation — for a fixture whose subject is a
+//! non-default checker configuration (see `iterator_immediate_abort`).
+//!
 //! Requires `cargo build --workspace` to have already produced
 //! `cargo-no-alloc`/`no-alloc-driver` in `target/<profile>/` —
 //! `cargo test --workspace` does this automatically. Located via
@@ -149,11 +153,30 @@ fn normalize(mut report: Report) -> Report {
     report
 }
 
+/// Per-case checker flags, one per line, from an optional `checker-args`
+/// file in the case directory. Every fixture runs under the checker's
+/// default configuration unless it says otherwise — a case that needs a
+/// non-default one (`--immediate-abort`, which rebuilds std) is stating
+/// that as part of what it asserts, not as harness trivia.
+fn checker_args(case_dir: &Path) -> Vec<String> {
+    let path = case_dir.join("checker-args");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
     let target_dir = case_dir.join("target/no-alloc");
     let _ = fs::remove_dir_all(&target_dir);
 
     let output = Command::new(bin)
+        .args(checker_args(case_dir))
         .arg("build")
         .current_dir(case_dir)
         .env_remove("NO_ALLOC_WARN_ONLY")
@@ -164,6 +187,11 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         // below strips these for the same reason.
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // A checker run that ends in a hard error prints anyhow's backtrace
+        // when the ambient environment has RUST_BACKTRACE set — machine
+        // paths, crate versions and all — which would put every fixture's
+        // stderr snapshot at the mercy of the developer's shell.
+        .env_remove("RUST_BACKTRACE")
         .env("NO_ALLOC_LOG", "off")
         // The expected.stderr snapshot is plain text; forcing color off
         // here keeps the comparison stable regardless of the caller's own
@@ -325,6 +353,7 @@ fn checker(case: &str, args: &[&str]) -> std::process::Output {
         .env_remove("NO_ALLOC_WARN_ONLY")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUST_BACKTRACE")
         .output()
         .expect("run cargo-no-alloc")
 }

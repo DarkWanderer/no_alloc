@@ -1,0 +1,51 @@
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+    --> src/main.rs:12:1
+     |
+  12 | fn root(buf: &[f32]) -> f32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: via `root`
+    --> src/main.rs:12:1
+     |
+  12 | fn root(buf: &[f32]) -> f32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `<std::slice::Iter<'_, f32> as std::iter::Iterator>::next`
+    --> src/main.rs:14:15
+     |
+  14 |     for &x in buf {
+     |               ^^^
+note: via `core::num::<impl usize>::unchecked_sub::precondition_check`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:78:17
+     |
+  78 |                   precondition_check($($arg,)*);
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
+     |
+1449 | /     uint_impl! {
+1450 | |         Self = usize,
+1451 | |         ActualT = u64,
+1452 | |         SignedT = isize,
+...    |
+1472 | |         bound_condition = " on 64-bit targets",
+1473 | |     }
+     | |_____- in this macro invocation
+note: via `core::panicking::panic_nounwind_fmt`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:73:21
+     |
+  73 |                       ::core::panicking::panic_nounwind_fmt(::core::fmt::Arguments::from_str(msg), false);
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/num/mod.rs:1449:5
+     |
+1449 | /     uint_impl! {
+1450 | |         Self = usize,
+1451 | |         ActualT = u64,
+1452 | |         SignedT = isize,
+...    |
+1472 | |         bound_condition = " on 64-bit targets",
+1473 | |     }
+     | |_____- in this macro invocation
+     = note: this error originates in the macro `assert_unsafe_precondition` which comes from the expansion of the macro `uint_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `iterator_reject` (bin "iterator_reject") due to 1 previous error

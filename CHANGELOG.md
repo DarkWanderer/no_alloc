@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the existing definition-level `def_path` — so `report.json`
   records which instantiation a chain frame refers to, matching what the
   rendered diagnostic already showed.
+- `--immediate-abort`, which builds the crate and the standard library with
+  `-Cpanic=immediate-abort` (implying `--build-std`). Panic paths then lower
+  to a bare `abort()` and are traversed as ordinary edges instead of being
+  excluded from the guarantee. This is what makes iterator code checkable:
+  measured over 35 iterator patterns, `panic = "abort"` passes none and
+  `--immediate-abort` passes 33 (ADR 0006, `docs/iterators.md`).
+- Non-allocating intrinsic table (`no_alloc_report::intrinsic_cannot_reach_allocator`).
+  An intrinsic is a resolved callee whose body lives in the compiler, so it is
+  now classified rather than rejected for having no MIR; an intrinsic outside
+  the table still rejects, and the diagnostic names it (ADR 0005).
+- `docs/iterators.md` and `examples/iterators`: the measured non-allocating
+  iterator subset, as prose and as 35 runnable roots.
+- UI fixtures may carry a `checker-args` file to run under a non-default
+  checker configuration.
 
 
 ### Fixed
@@ -37,8 +51,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/ui.rs` strips inherited `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER`
   before invoking the checker, and resolves the built binary relative to the
   test executable rather than trusting `CARGO_TARGET_DIR`.
+- `tests/ui.rs` also strips `RUST_BACKTRACE`, which otherwise appended
+  anyhow's machine-specific backtrace to every fixture's stderr snapshot and
+  failed the whole matrix on developer machines that export it.
+- README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
+  which is a `compile_error!` on the pinned nightly — it is a panic strategy
+  now, and `--immediate-abort` supplies it.
 
 ### Changed
 
+- Body availability is decided by `InstanceKind` rather than by asking
+  `is_mir_available` about the instance's `DefId`, and a call edge resolves
+  from the callee operand's type rather than only from a MIR constant. Shim
+  instances and callbacks passed as function items are followed instead of
+  rejected — `Iterator::max`, `min_by_key`, `flat_map` and `.scan(..).last()`
+  become checkable, with function pointers and virtual dispatch still
+  rejecting (ADR 0007).
 - Declared MSRV for `no_alloc_check` and `no_alloc_report` raised to 1.88,
   matching what their test suites actually require.

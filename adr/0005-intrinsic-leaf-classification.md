@@ -1,0 +1,70 @@
+# ADR 0005: Classify intrinsics against a leaf table instead of rejecting them
+
+## Status
+
+Accepted 2026-08-25.
+
+## Context
+
+Until now every `InstanceKind::Intrinsic` callee was rejected, sharing the
+"no statically available MIR body for this callee" path with foreign items
+and `dyn` dispatch. That reading conflates two different situations. A
+foreign callee is *unresolved*: the traversal does not know what runs. An
+intrinsic is *fully resolved* — `Instance::try_resolve` named it exactly —
+and what it lacks is a MIR body, because its body is the code the backend
+emits for it. ADR 0003 asks the checker to reject what it cannot resolve;
+it does not ask it to reject what it has resolved and can classify.
+
+The practical cost of the old behaviour was that no iterator was checkable.
+Under `-Cpanic=immediate-abort` (ADR 0006) every panic path in the slice
+iterator internals ends in `core::intrinsics::abort`, and the hint around an
+overflow check ends in `core::intrinsics::cold_path`. Both were rejected, so
+all twenty iterator patterns in `docs/iterators.md` were rejected, and none
+of them at anything that allocates.
+
+## Decision
+
+An intrinsic callee is classified against a table of intrinsics whose
+lowering provably contains no call into Rust code, and is therefore terminal
+rather than unresolved. The table lives in
+`crates/no_alloc_report/src/intrinsic_table.rs` (a pure function of a name,
+so it is unit-testable on stable, like `parse_root_spec`).
+
+- The table is an **allowlist**. An intrinsic that is not named in it still
+  rejects, with a message that names it — so a new intrinsic in a future
+  toolchain rejects until someone has classified it, which is the direction
+  of failure ADR 0003 asks for.
+- Entries are matched on `ty::IntrinsicDef::name`, the compiler's own
+  dispatch key for the intrinsic. This is the intrinsic's identity, not a
+  guess derived from a linker symbol, and so is not the symbol-name matching
+  ADR 0003 rules out for allocator detection (`leaf.rs` still uses
+  `CodegenFnAttrFlags` and nothing else).
+- Deliberately excluded: `catch_unwind`, `const_eval_select`,
+  `contract_check_requires`, `contract_check_ensures`, `autodiff`,
+  `offload` — each runs a function supplied by its caller, which is exactly
+  the case the traversal cannot see through — plus `const_allocate`,
+  `const_deallocate`, `const_make_global`, and the SIMD, GPU, `va_*`, and
+  `rustc_peek` families, which this table has not audited.
+
+The allocator leaf check still runs before the intrinsic check, for the same
+ordering reason `leaf.rs` documents: a classification must never be able to
+mask a real allocator terminal.
+
+## Consequences
+
+Iterators become checkable under the mode in ADR 0006 (19 of the 20 patterns
+in `docs/iterators.md` pass; the twentieth fails for an unrelated reason).
+Ordinary intrinsic-backed code is checkable in any mode: `f32::sqrt` and
+`u32::count_ones` no longer reject (`tests/ui/intrinsic_leaf`).
+
+The table is a soundness surface: each entry asserts that the compiler's
+lowering of that intrinsic cannot reach the allocator. Adding an entry is a
+claim to be checked against that toolchain's lowering, not a convenience for
+making a test pass — an intrinsic that takes a function and calls it must
+never be added. `tests/ui/intrinsic_reject` pins the rejecting half, and
+`intrinsic_table.rs`'s unit tests pin the excluded names.
+
+Because the table is keyed on names from a pinned nightly, a toolchain bump
+must re-check it: a renamed intrinsic silently becomes unclassified (safe:
+it rejects), while a *reused* name whose lowering changed would not be
+caught by anything here.

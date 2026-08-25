@@ -28,6 +28,11 @@ Options:
       --all-crates   Instrument every crate in the build (RUSTC_WRAPPER),
                      not just workspace members (RUSTC_WORKSPACE_WRAPPER)
       --build-std    Pass -Zbuild-std to Cargo
+      --immediate-abort
+                     Compile everything, std included, with
+                     -Cpanic=immediate-abort so panic paths lower to a bare
+                     abort() and can be checked instead of rejected.
+                     Implies --build-std. See docs/iterators.md
       --warn-only    Report findings on stderr without failing the build
       --root PATH    Additionally check an unannotated function by its
                      canonical path (repeatable)
@@ -41,6 +46,14 @@ const ZERO_ROOTS_WARNING: &str = "warning: no_alloc checked 0 root instances \
 — nothing was analyzed. This usually means either no `#[no_alloc]` marker \
 was reached while building, or the marker lives in a crate outside the \
 workspace (pass --all-crates to instrument it).";
+
+/// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
+/// unstable, hence the accompanying `-Zunstable-options`. Passing it here
+/// rather than asking users to set `[profile.dev] panic = "immediate-abort"`
+/// keeps the checked crate's own manifest stable-buildable: the manifest key
+/// requires `cargo-features = ["panic-immediate-abort"]`, which makes the
+/// whole manifest nightly-only (ADR 0002's zero-footprint rule).
+const IMMEDIATE_ABORT_RUSTFLAGS: &[&str] = &["-Zunstable-options", "-Cpanic=immediate-abort"];
 
 const REQUIRED_RUSTFLAGS: &[&str] = &[
     "--cfg=no_alloc_check",
@@ -56,6 +69,7 @@ const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 #[derive(Debug, PartialEq, Eq)]
 struct Invocation {
     build_std: bool,
+    immediate_abort: bool,
     all_crates: bool,
     warn_only: bool,
     roots: Vec<String>,
@@ -83,6 +97,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     }
 
     let mut build_std = false;
+    let mut immediate_abort = false;
     let mut all_crates = false;
     let mut warn_only = false;
     let mut roots = Vec::new();
@@ -94,6 +109,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 break;
             }
             "--build-std" => build_std = true,
+            // Implies --build-std: the panic strategy has to match all the
+            // way down, and the precompiled sysroot was not built with it.
+            "--immediate-abort" => {
+                immediate_abort = true;
+                build_std = true;
+            }
             "--all-crates" => all_crates = true,
             "--warn-only" => warn_only = true,
             // A cargo subcommand is expected to answer these regardless of
@@ -154,6 +175,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     roots.dedup();
     Ok(ParsedArgs::Run(Invocation {
         build_std,
+        immediate_abort,
         all_crates,
         warn_only,
         roots,
@@ -257,11 +279,17 @@ fn find_driver() -> Result<PathBuf> {
     })
 }
 
-fn add_required_rustflags(command: &mut Command) {
+fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
+    let extra: &[&str] = if immediate_abort {
+        IMMEDIATE_ABORT_RUSTFLAGS
+    } else {
+        &[]
+    };
+    let required = REQUIRED_RUSTFLAGS.iter().chain(extra);
     if let Some(encoded) = env::var_os("CARGO_ENCODED_RUSTFLAGS") {
         let mut value = encoded.to_string_lossy().into_owned();
         let existing: HashSet<String> = value.split('\x1f').map(str::to_owned).collect();
-        for flag in REQUIRED_RUSTFLAGS {
+        for flag in required {
             if !existing.contains(*flag) {
                 if !value.is_empty() {
                     value.push('\x1f');
@@ -272,7 +300,7 @@ fn add_required_rustflags(command: &mut Command) {
         command.env("CARGO_ENCODED_RUSTFLAGS", value);
     } else {
         let mut value = env::var("RUSTFLAGS").unwrap_or_default();
-        for flag in REQUIRED_RUSTFLAGS {
+        for flag in required {
             if !value.split_whitespace().any(|existing| existing == *flag) {
                 if !value.is_empty() {
                     value.push(' ');
@@ -410,7 +438,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         command.arg("-Zbuild-std");
     }
     command.args(&inv.cargo_args[split..]);
-    add_required_rustflags(&mut command);
+    add_required_rustflags(&mut command, inv.immediate_abort);
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
     command.env("NO_ALLOC_ROOTS", inv.roots.join(","));
     if inv.warn_only {
@@ -560,6 +588,45 @@ mod tests {
     }
 
     #[test]
+    fn immediate_abort_implies_build_std() -> Result<()> {
+        let inv = parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"])?;
+        assert!(inv.immediate_abort);
+        // Rebuilding the sysroot is not optional here: the precompiled one
+        // was built with a different panic strategy, and mixing them is
+        // exactly what this flag exists to avoid.
+        assert!(inv.build_std);
+        // --build-std on its own must not turn the panic strategy on.
+        let inv = parse(&["cargo-no-alloc", "--build-std", "--", "build"])?;
+        assert!(inv.build_std);
+        assert!(!inv.immediate_abort);
+        Ok(())
+    }
+
+    #[test]
+    fn immediate_abort_rustflags_are_added_only_when_asked_for() {
+        let flags = |immediate_abort| {
+            let mut command = Command::new("true");
+            add_required_rustflags(&mut command, immediate_abort);
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "RUSTFLAGS" || *name == "CARGO_ENCODED_RUSTFLAGS")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let without = flags(false);
+        let with = flags(true);
+        for flag in IMMEDIATE_ABORT_RUSTFLAGS {
+            assert!(!without.contains(flag), "unasked-for `{flag}`");
+            assert!(with.contains(flag), "missing `{flag}`");
+        }
+        for flag in REQUIRED_RUSTFLAGS {
+            assert!(without.contains(flag), "missing `{flag}`");
+            assert!(with.contains(flag), "missing `{flag}`");
+        }
+    }
+
+    #[test]
     fn rejects_malformed_checker_arguments() {
         assert!(parse(&["cargo-no-alloc", "--root"]).is_err());
         assert!(parse(&["cargo-no-alloc", "--root="]).is_err());
@@ -628,6 +695,7 @@ mod tests {
         for flag in [
             "--all-crates",
             "--build-std",
+            "--immediate-abort",
             "--warn-only",
             "--root",
             "--help",
