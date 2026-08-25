@@ -84,3 +84,36 @@ Because the table is keyed on names from a pinned nightly, a toolchain bump
 must re-check it: a renamed intrinsic silently becomes unclassified (safe:
 it rejects), while a *reused* name whose lowering changed would not be
 caught by anything here.
+
+### What the table does not cover, and neither does the tool
+
+Some of these lowerings emit a call to a *named* symbol — `powf` for
+`llvm.pow.f32`, `memcpy` for a large copy, `__addtf3` for `f128` arithmetic.
+A program can define that symbol itself, in Rust, and allocate in it:
+
+```rust
+#[unsafe(no_mangle)]
+pub extern "C" fn powf(_x: f32, _y: f32) -> f32 { *Box::new(2.0) }
+```
+
+A root calling `f32::powf` then passes, wrongly. This is a genuine limit,
+and it is worth being precise about whose limit it is: **it is not created
+by this table**. Verified on the pinned toolchain, a `#[no_alloc]` function
+whose entire body is `*big` for a 512-byte struct compiles to
+`call void @llvm.memcpy.p0.p0.i64(..., i64 512, ...)` — the same
+interposable symbol, reached from a function containing no intrinsic, no
+`Call` terminator, and nothing in MIR for any traversal to walk. Both
+functions pass today.
+
+So the boundary of the guarantee is MIR: the tool sees the calls the
+compiler puts in MIR, not the ones the backend synthesizes from it. Making
+the float and bulk-memory intrinsics reject would not restore soundness
+against a hostile `#[no_mangle]` — it would reject `x.sqrt()` while still
+passing the struct move next to it, which is a worse place to stand than
+stating the boundary plainly. It is stated in `README.md` under "Guarantee
+and limitations".
+
+If the project would rather pay that cost — rejecting `sqrt`, `powf`,
+`compare_bytes` and the rest of the libcall-backed entries, and accepting
+that DSP-shaped code stops being checkable — the change is mechanical:
+delete `is_float_arithmetic` and the bulk-memory names from this table.

@@ -14,12 +14,22 @@
 //!
 //! So intrinsics are classified, not assumed, and the classification is an
 //! allowlist: an intrinsic named here lowers to machine instructions, an
-//! LLVM intrinsic, or a `compiler_builtins`/libc symbol (`memcpy`,
-//! `memcmp`, `__addtf3`, ...), none of which can call back into Rust code
-//! and therefore none of which can reach the global allocator. Anything not
-//! named here still rejects, so a new intrinsic in a future toolchain is
-//! rejected until someone has looked at it — the same direction of failure
-//! ADR 0003 asks for everywhere else.
+//! LLVM intrinsic, or a `compiler_builtins`/libm/libc symbol (`memcpy`,
+//! `memcmp`, `powf`, `__addtf3`, ...) — never to a call into Rust code that
+//! the traversal could have walked instead. Anything not named here still
+//! rejects, so a new intrinsic in a future toolchain is rejected until
+//! someone has looked at it — the same direction of failure ADR 0003 asks
+//! for everywhere else.
+//!
+//! One caveat, and it is the whole tool's rather than this table's: where
+//! that lowering emits a *named* symbol, a program can define that symbol
+//! itself — `#[no_mangle] extern "C" fn powf` — and the analysis will not
+//! see it, because no such call exists in MIR to follow. Nothing about
+//! intrinsics is special here: an ordinary struct move emits
+//! `llvm.memcpy` and reaches the `memcpy` symbol with nothing in MIR at
+//! all. ADR 0005 records the boundary; treating the intrinsic half of it as
+//! a rejection would not close it, only make the tool inconsistent about
+//! which half it reports.
 //!
 //! Deliberately *absent*, because each one runs a function its caller
 //! supplied and the traversal cannot see what that function does:

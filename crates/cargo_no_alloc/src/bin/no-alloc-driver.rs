@@ -41,7 +41,14 @@ impl Callbacks for NoAllocCallbacks {
         let discovery = no_alloc_analysis::roots::discover(tcx);
         let mut report = Report {
             roots: Vec::new(),
-            panic_strategy: Some(no_alloc_analysis::traversal::panic_strategy(tcx)),
+            // Claimed below, and only if this compilation actually produced
+            // verdicts: Cargo does not pass the target `RUSTFLAGS` to host
+            // units (build scripts, proc macros), so a wrapped host unit
+            // compiles under a different panic strategy than the code being
+            // checked. Letting its empty fragment state one would make every
+            // merge in a workspace with a build script disagree with itself
+            // and drop the field entirely.
+            panic_strategy: None,
             selection_errors: discovery.selection_errors,
         };
         let mut any_hard_error = false;
@@ -69,6 +76,10 @@ impl Callbacks for NoAllocCallbacks {
                     });
                 }
             }
+        }
+
+        if !report.roots.is_empty() {
+            report.panic_strategy = Some(no_alloc_analysis::traversal::panic_strategy(tcx));
         }
 
         let fragment_dir = std::env::var_os("NO_ALLOC_FRAGMENT_DIR")

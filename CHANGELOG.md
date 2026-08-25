@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-allocating leaves. Codegen emits a `panic_nounwind` call for an
   instantiation that fails the requirement, which the traversal never sees,
   so they are classified per instantiation with the same query codegen uses.
+- The panic strategy in `report.json` is claimed only by fragments that
+  carry verdicts. Cargo does not pass the target `RUSTFLAGS` to host units,
+  so a wrapped build script or proc macro compiles under a different
+  strategy; its empty fragment used to disagree with the real ones and drop
+  the field from the merged report entirely.
 - `--immediate-abort -- test` is rejected during argument parsing instead of
   failing inside rustc with `building tests with panic=abort is not
   supported without -Zpanic_abort_tests`, minutes into a sysroot rebuild.

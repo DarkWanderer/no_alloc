@@ -137,6 +137,17 @@ until the sysroot is rebuilt. Measured over 35 iterator patterns, `abort`
 passes none of them and `--immediate-abort` passes 33 — see
 [`docs/iterators.md`](docs/iterators.md).
 
+**The boundary is MIR, not the machine code.** The analysis follows the
+calls the compiler puts in MIR; it does not see the ones the backend
+synthesizes from it. A large struct move becomes a `memcpy` call, `f32::powf`
+becomes a `powf` call, `f128` arithmetic becomes a `compiler_builtins` call —
+none of which appear as MIR terminators. Those symbols are assumed to be the
+platform's. A program that defines one of them itself, in Rust, and
+allocates there (`#[no_mangle] extern "C" fn powf`) defeats the analysis, and
+it does so whether or not any intrinsic is involved. See
+[ADR 0005](adr/0005-intrinsic-leaf-classification.md) for the measurement
+and the alternative.
+
 **`cargo no-alloc -- test` is not usable for realistic code.** Cargo ignores
 `[profile.*] panic` for the `test` profile — it always builds tests under
 `panic=unwind`, regardless of what the manifest sets — so every `Assert`
