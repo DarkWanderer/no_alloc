@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inherited flags — exactly as coherent as the flag, and already treated
   that way by the post-build check. Gating on `--immediate-abort` instead
   rejected that legitimate combination before the build ever ran.
+- A mixed-sysroot rejection is now recorded in the persisted `report.json`
+  (via `selection_errors`), not only raised as a process error. Previously
+  `report.json` was written before the check ran, so a trivial root that
+  passes under any panic strategy would be written as a bare `Pass` with an
+  `ImmediateAbort` label — `Report::is_success()` on the file alone said
+  `true` even though the process producing it exited nonzero. A tool
+  reading the JSON directly, rather than this process's exit code, would
+  have seen a false success.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

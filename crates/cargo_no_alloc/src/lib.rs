@@ -393,6 +393,26 @@ fn mixed_sysroot_panic_strategy(build_std: bool, any_immediate_abort: bool) -> b
     !build_std && any_immediate_abort
 }
 
+/// Marks a report so that `Report::is_success()` says `false` on it, the
+/// instant a mixed sysroot is detected — before the report is written to
+/// disk. Without this, `report.json` could show every root passing (a
+/// trivial function has no reason to care what std's panic strategy is)
+/// while the process that produced it exits nonzero: a tool reading the
+/// file directly, rather than this process's own exit code, would see a
+/// false success. `selection_errors` is the existing channel for "this
+/// report should not be trusted as-is" (already used for an unmatched
+/// `--root`), so this reuses it rather than adding a second one.
+fn taint_report_for_mixed_sysroot(report: &mut Report, mixed_sysroot: bool) {
+    if mixed_sysroot {
+        report.selection_errors.push(
+            "this build compiled under `-Cpanic=immediate-abort` without rebuilding the \
+             standard library (`--build-std`); every verdict above was produced against a \
+             sysroot whose panic runtime does not match the strategy claimed"
+                .to_owned(),
+        );
+    }
+}
+
 /// Whether the pre-flight ambient-flag guard should reject the run.
 ///
 /// The escape hatch is `--build-std`, not `--immediate-abort` specifically:
@@ -651,7 +671,22 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     }
 
     let cargo_status = cargo_status(command)?;
-    let (report, any_immediate_abort) = aggregate(&fragment_dir, &inv.roots)?;
+    let (mut report, any_immediate_abort) = aggregate(&fragment_dir, &inv.roots)?;
+    // The pre-flight guard reads the environment, and the strategy can also
+    // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
+    // plus a profile), `config.toml`, or `--profile`. This one asks the
+    // build itself: the driver recorded the strategy rustc actually used, so
+    // a mixed configuration is caught however it was selected.
+    //
+    // Recorded into `selection_errors` before the report is written, not
+    // just raised as a hard error afterward: `Report::is_success()` would
+    // otherwise say `true` for a persisted `report.json` whose roots all
+    // passed, even though those verdicts were produced against a sysroot
+    // that was never rebuilt to match. A tool reading the file directly
+    // (rather than this process's own exit code) needs the taint to be
+    // in the artifact, not only on stderr.
+    let mixed_sysroot = mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort);
+    taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
     report
         .write_to_file(&target_dir.join("report.json"))
         .context("failed to write final report.json")?;
@@ -675,14 +710,12 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     if report.roots.is_empty() {
         eprintln!("{ZERO_ROOTS_WARNING}");
     }
-    // The pre-flight guard reads the environment, and the strategy can also
-    // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
-    // plus a profile), `config.toml`, or `--profile`. This one asks the
-    // build itself: the driver recorded the strategy rustc actually used, so
-    // a mixed configuration is caught however it was selected. The report is
-    // written first, so the evidence survives the failure.
+    // The report is written first (above), so the evidence survives this
+    // failure regardless of `--warn-only` — a mixed sysroot invalidates the
+    // very mechanism `--warn-only` relies on to interpret results, so unlike
+    // an ordinary finding it is never downgraded to a warning.
     ensure!(
-        !mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort),
+        !mixed_sysroot,
         "this build compiled with `-Cpanic=immediate-abort` against the precompiled standard \
          library, which carries its own panic runtime — so the report's verdicts would claim \
          panic paths that lower to `abort` when std's do not. Pass `--immediate-abort`, which \
@@ -999,6 +1032,36 @@ mod tests {
 
         std::fs::remove_dir_all(directory)?;
         Ok(())
+    }
+
+    #[test]
+    fn taint_report_for_mixed_sysroot_flips_is_success() {
+        // The scenario this exists for: a trivial root that would pass
+        // under any panic strategy, so nothing about the traversal itself
+        // objects — but the sysroot claim is untrustworthy, and a reader of
+        // `report.json` alone (not this process's exit code) needs that to
+        // show up in the file.
+        let passing = Report {
+            roots: vec![RootVerdict {
+                root: "a".into(),
+                instance: "a".into(),
+                verdict: Verdict::Pass,
+            }],
+            panic_strategy: Some(PanicStrategy::ImmediateAbort),
+            ..Report::default()
+        };
+        assert!(passing.is_success());
+
+        let mut tainted = passing.clone();
+        taint_report_for_mixed_sysroot(&mut tainted, true);
+        assert!(!tainted.is_success());
+        assert_eq!(tainted.selection_errors.len(), 1);
+
+        // Not tainted when the sysroot isn't mixed: a coherent report is
+        // left exactly as `aggregate` produced it.
+        let mut untouched = passing.clone();
+        taint_report_for_mixed_sysroot(&mut untouched, false);
+        assert_eq!(untouched, passing);
     }
 
     #[test]

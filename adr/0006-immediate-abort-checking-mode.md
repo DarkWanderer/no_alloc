@@ -93,6 +93,16 @@ disagreement is exactly the case `Report::merge` reports as `None` for
 `report.json`'s sake. Using the merged field here would let the mix through
 silently; checking every fragment does not.
 
+The rejection lands in the persisted `report.json` itself, not only on
+stderr and the process exit code: a mixed sysroot is pushed onto
+`selection_errors` (the existing channel for "this report should not be
+trusted as-is") before the file is written, so `Report::is_success()`
+already says `false` for anyone reading the file directly. Without this, a
+trivial root with no reason to care about std's panic strategy would show a
+bare `Pass` with an `ImmediateAbort` label and nothing else — indistinguishable
+from a coherent run to a consumer that checks the JSON instead of this
+process's exit code.
+
 ## Consequences
 
 `--immediate-abort` is the mode in which realistic code can be checked, and
