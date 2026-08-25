@@ -65,7 +65,10 @@ instrument every crate in the build (`RUSTC_WRAPPER`) instead.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
-written to `target/no-alloc/report.json`.
+written to `target/no-alloc/report.json`, and records the panic strategy the
+build used (`"panic_strategy": "unwind" | "abort" | "immediate_abort"`)
+because a `Pass` means something different under each — see "Guarantee and
+limitations".
 
 Every invocation runs `cargo clean` on the checker's target first, so
 **every `cargo no-alloc` run is a from-scratch rebuild**, never an
@@ -75,8 +78,9 @@ configuration change can never be hidden by Cargo's build cache (see
 compile time, not just the cost of what changed.
 
 `--immediate-abort` rebuilds the crate and the standard library with
-`-Cpanic=immediate-abort` (implying `--build-std`), which is what makes
-iterator-shaped code checkable at all — see
+`-Cpanic=immediate-abort` (implying `--build-std`, and incompatible with
+`-- test`, which rustc will not build under an abort strategy), which is
+what makes iterator-shaped code checkable at all — see
 [`docs/iterators.md`](docs/iterators.md) and
 [ADR 0006](adr/0006-immediate-abort-checking-mode.md).
 

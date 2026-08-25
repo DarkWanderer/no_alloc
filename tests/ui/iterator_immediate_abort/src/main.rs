@@ -47,6 +47,18 @@ fn largest(buf: &[u32]) -> u32 {
     }
 }
 
+/// Also the passing half of the per-instantiation validity classification
+/// (ADR 0005): the search routes through `assert_inhabited::<u32>`, which
+/// holds, so codegen emits nothing for it and the call is terminal. The
+/// rejecting half is `tests/ui/validity_assert`.
+#[no_alloc_check::no_alloc]
+fn search(buf: &[u32]) -> usize {
+    match buf.binary_search(&2) {
+        Ok(index) => index,
+        Err(index) => index,
+    }
+}
+
 /// The limitation that is left, and it is a real one rather than a
 /// modelling gap: `sort_unstable` picks its partition implementation
 /// through an actual `fn` pointer, so there is no single body to walk to.
@@ -59,11 +71,12 @@ fn main() {
     let d = [1.0f32, 2.0, 3.0];
     let mut u = [3u32, 1, 2];
     println!(
-        "{} {} {} {}",
+        "{} {} {} {} {}",
         sum_loop(&d),
         dot(&d, &d),
         windowed(&d),
-        largest(&u)
+        largest(&u),
+        search(&u)
     );
     sorted(&mut u);
     println!("{u:?}");

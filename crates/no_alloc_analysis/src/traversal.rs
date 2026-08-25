@@ -35,11 +35,25 @@
 //! rather than from whether it is a MIR constant (ADR 0007).
 
 use crate::leaf::allocates;
-use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, Verdict};
+use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
 use rustc_middle::mir::TerminatorKind;
+use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
+
+/// The panic strategy this compilation is running under, converted at the
+/// rustc boundary for the report. What the traversal does with panic paths
+/// depends on it (`Assert` above, and whether the panic machinery is even
+/// reachable as MIR), so a report that carries a verdict should carry this
+/// alongside it — see ADR 0006.
+pub fn panic_strategy(tcx: TyCtxt<'_>) -> PanicStrategy {
+    match tcx.sess.panic_strategy() {
+        rustc_target::spec::PanicStrategy::Unwind => PanicStrategy::Unwind,
+        rustc_target::spec::PanicStrategy::Abort => PanicStrategy::Abort,
+        rustc_target::spec::PanicStrategy::ImmediateAbort => PanicStrategy::ImmediateAbort,
+    }
+}
 
 /// A checked root instance: the stable, JSON-able `Verdict` plus the raw
 /// `Span`s backing its chain (`Verdict::Frame::span` is already a rendered
@@ -132,6 +146,9 @@ fn visit<'tcx>(
     if let InstanceKind::Intrinsic(def_id) = instance.def {
         let finding = match tcx.intrinsic(def_id) {
             Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => None,
+            Some(intrinsic) if ValidityRequirement::from_intrinsic(intrinsic.name).is_some() => {
+                classify_validity_assertion(tcx, instance, intrinsic, stack)
+            }
             Some(intrinsic) => Some(Finding::Rejected(
                 stack.clone(),
                 format!(
@@ -217,6 +234,44 @@ fn visit<'tcx>(
 
     stack.pop();
     pending_reject
+}
+
+/// `assert_inhabited`, `assert_zero_valid` and `assert_mem_uninitialized_valid`
+/// are the one family whose lowering depends on the instantiation, so they
+/// cannot be settled by the name table: codegen asks whether *this* type
+/// meets the requirement and emits either nothing at all or a call to the
+/// `panic_nounwind` lang item — a Rust function, synthesized after MIR, that
+/// this traversal would never see (`rustc_codegen_ssa`'s
+/// `codegen_panic_intrinsic`).
+///
+/// So this asks codegen's own question, with codegen's own query, and
+/// classifies per instantiation (ADR 0001, ADR 0005). A type that meets the
+/// requirement compiles to no code and is terminal; one that does not is
+/// rejected, because the panic it compiles to is exactly the edge the
+/// traversal cannot follow. A type whose layout cannot be computed is
+/// rejected too — no answer is not a "yes".
+fn classify_validity_assertion<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    intrinsic: ty::IntrinsicDef,
+    stack: &[(Instance<'tcx>, Span)],
+) -> Option<Finding<'tcx>> {
+    let requirement = ValidityRequirement::from_intrinsic(intrinsic.name)?;
+    let ty = instance.args.type_at(0);
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let holds = tcx
+        .check_validity_requirement((requirement, typing_env.as_query_input(ty)))
+        .unwrap_or(false);
+    if holds {
+        return None;
+    }
+    Some(Finding::Rejected(
+        stack.to_vec(),
+        format!(
+            "`{}::<{ty}>` does not hold, so this call compiles to a panic",
+            intrinsic.name
+        ),
+    ))
 }
 
 fn classify_terminator<'tcx>(

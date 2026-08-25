@@ -20,5 +20,6 @@
         "reason": "intrinsic `catch_unwind` is not in the non-allocating intrinsic table"
       }
     }
-  ]
+  ],
+  "panic_strategy": "abort"
 }

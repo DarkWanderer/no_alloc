@@ -41,6 +41,7 @@ impl Callbacks for NoAllocCallbacks {
         let discovery = no_alloc_analysis::roots::discover(tcx);
         let mut report = Report {
             roots: Vec::new(),
+            panic_strategy: Some(no_alloc_analysis::traversal::panic_strategy(tcx)),
             selection_errors: discovery.selection_errors,
         };
         let mut any_hard_error = false;

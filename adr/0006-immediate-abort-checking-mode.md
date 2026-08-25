@@ -74,6 +74,13 @@ worth stating when a result is reported:
 | `panic = "abort"` | `Assert` out of scope, not proven (ADR 0003); explicit panic calls reject |
 | `--immediate-abort` | traversed and checked; they end in `abort` |
 
+Because those three mean different things, `report.json` records the panic
+strategy the build actually used (`no_alloc_report::PanicStrategy`, taken
+from `tcx.sess.panic_strategy()` per fragment rather than from the flag the
+user typed, since `RUSTFLAGS` can set it too). A `Pass` read back later is
+otherwise uninterpretable: nothing in it would say whether panic paths were
+excluded or checked.
+
 The guarantee under `--immediate-abort` is the strongest of the three and is
 the only one with no panic-path carve-out. It says nothing about the
 program's behaviour under its *own* panic strategy: a crate that ships with

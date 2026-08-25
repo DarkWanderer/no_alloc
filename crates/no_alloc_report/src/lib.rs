@@ -7,5 +7,5 @@ mod report;
 mod root_spec;
 
 pub use intrinsic_table::intrinsic_cannot_reach_allocator;
-pub use report::{Frame, Report, ReportFragment, RootVerdict, Verdict};
+pub use report::{Frame, PanicStrategy, Report, ReportFragment, RootVerdict, Verdict};
 pub use root_spec::parse_root_spec;

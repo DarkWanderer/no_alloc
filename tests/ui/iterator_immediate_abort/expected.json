@@ -15,6 +15,13 @@
       }
     },
     {
+      "root": "iterator_immediate_abort::search",
+      "instance": "search",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
       "root": "iterator_immediate_abort::sorted",
       "instance": "sorted",
       "verdict": {
@@ -68,5 +75,6 @@
         "kind": "pass"
       }
     }
-  ]
+  ],
+  "panic_strategy": "immediate_abort"
 }

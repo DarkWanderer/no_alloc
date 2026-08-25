@@ -40,9 +40,33 @@ pub struct RootVerdict {
     pub verdict: Verdict,
 }
 
+/// The panic strategy the checked build was compiled under.
+///
+/// A `Pass` means something different in each of these, so a report that
+/// does not record it cannot be read back correctly once the invocation
+/// that produced it is gone (ADR 0006). This is the strategy rustc actually
+/// compiled with, not the flag the user typed: `RUSTFLAGS` can set it too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanicStrategy {
+    /// `Assert` rejects outright; nothing panic-adjacent is checkable.
+    Unwind,
+    /// `Assert` is out of the guarantee's scope — not proven free of
+    /// allocation, since a panic still calls the handler (ADR 0003).
+    Abort,
+    /// Panic paths lower to a bare `abort()` and are traversed like any
+    /// other edge, so a `Pass` covers them too.
+    ImmediateAbort,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub roots: Vec<RootVerdict>,
+    /// `None` when nothing recorded one (an empty run), or when fragments
+    /// disagreed — which one build should never produce, and is reported as
+    /// "unknown" rather than by picking a winner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panic_strategy: Option<PanicStrategy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selection_errors: Vec<String>,
 }
@@ -64,10 +88,19 @@ impl Report {
 
     pub fn merge(reports: impl IntoIterator<Item = Self>) -> Self {
         let mut merged = Self::default();
+        let mut strategies = std::collections::BTreeSet::new();
         for report in reports {
             merged.roots.extend(report.roots);
             merged.selection_errors.extend(report.selection_errors);
+            strategies.extend(report.panic_strategy);
         }
+        // Every fragment of one build sees the same flags, so anything other
+        // than exactly one answer means the report cannot claim a strategy.
+        let mut found = strategies.into_iter();
+        merged.panic_strategy = match (found.next(), found.next()) {
+            (single, None) => single,
+            _ => None,
+        };
         merged.roots.sort_by(|a, b| {
             (&a.root, &a.instance, &a.verdict).cmp(&(&b.root, &b.instance, &b.verdict))
         });
@@ -130,6 +163,7 @@ mod tests {
                     verdict: Verdict::NotInstantiated,
                 },
             ],
+            panic_strategy: None,
             selection_errors: vec![],
         };
         assert!(report.is_success());
@@ -143,6 +177,7 @@ mod tests {
                 instance: "a".into(),
                 verdict: Verdict::Violation { chain: vec![] },
             }],
+            panic_strategy: None,
             selection_errors: vec![],
         };
         assert!(!report.is_success());
@@ -156,6 +191,7 @@ mod tests {
                 instance: "a".into(),
                 verdict: Verdict::Pass,
             }],
+            panic_strategy: None,
             selection_errors: vec![],
         };
         let path = std::env::temp_dir().join(format!(
@@ -185,6 +221,7 @@ mod tests {
                     reason: "dyn dispatch".into(),
                 },
             }],
+            panic_strategy: None,
             selection_errors: vec![],
         };
         let json = serde_json::to_string(&report).unwrap();
@@ -210,6 +247,58 @@ mod tests {
         assert_ne!(back.instance, back.def_path);
     }
 
+    /// One build compiles everything with one panic strategy, so the merged
+    /// report can state it. Anything else is "unknown" rather than a guess:
+    /// a `Pass` read back later means different things per strategy.
+    #[test]
+    fn merge_keeps_an_agreed_panic_strategy_and_drops_a_disagreement() {
+        let with = |strategy| Report {
+            panic_strategy: strategy,
+            ..Report::default()
+        };
+        assert_eq!(
+            Report::merge([
+                with(Some(PanicStrategy::ImmediateAbort)),
+                with(Some(PanicStrategy::ImmediateAbort)),
+            ])
+            .panic_strategy,
+            Some(PanicStrategy::ImmediateAbort)
+        );
+        assert_eq!(
+            Report::merge([with(Some(PanicStrategy::Abort)), with(None)]).panic_strategy,
+            Some(PanicStrategy::Abort)
+        );
+        assert_eq!(
+            Report::merge([
+                with(Some(PanicStrategy::Abort)),
+                with(Some(PanicStrategy::Unwind)),
+            ])
+            .panic_strategy,
+            None
+        );
+        assert_eq!(Report::merge([]).panic_strategy, None);
+    }
+
+    /// The field is skipped when absent, so a report written before it
+    /// existed still parses — and one written now round-trips its strategy.
+    #[test]
+    fn panic_strategy_round_trips_and_is_optional() {
+        let json = serde_json::to_string(&Report {
+            panic_strategy: Some(PanicStrategy::ImmediateAbort),
+            ..Report::default()
+        })
+        .unwrap();
+        assert!(json.contains("\"immediate_abort\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<Report>(&json)
+                .unwrap()
+                .panic_strategy,
+            Some(PanicStrategy::ImmediateAbort)
+        );
+        let legacy: Report = serde_json::from_str(r#"{"roots":[]}"#).unwrap();
+        assert_eq!(legacy.panic_strategy, None);
+    }
+
     #[test]
     fn merge_is_sorted_and_deduplicated() {
         let root = RootVerdict {
@@ -220,10 +309,12 @@ mod tests {
         let merged = Report::merge([
             Report {
                 roots: vec![root.clone()],
+                panic_strategy: None,
                 selection_errors: vec!["b".into()],
             },
             Report {
                 roots: vec![root],
+                panic_strategy: None,
                 selection_errors: vec!["a".into(), "b".into()],
             },
         ]);
@@ -240,6 +331,7 @@ mod tests {
                     instance: "root".into(),
                     verdict: Verdict::NotInstantiated,
                 }],
+                panic_strategy: None,
                 selection_errors: vec![],
             },
             Report {
@@ -248,6 +340,7 @@ mod tests {
                     instance: "dependency::root::<u32>".into(),
                     verdict: Verdict::Pass,
                 }],
+                panic_strategy: None,
                 selection_errors: vec![],
             },
         ]);

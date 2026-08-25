@@ -1,18 +1,18 @@
 error: no_alloc: this function has an unresolved call (callee is a function pointer, not a statically resolvable body)
-    --> src/main.rs:54:1
+    --> src/main.rs:66:1
      |
-  54 | fn sorted(buf: &mut [u32]) {
+  66 | fn sorted(buf: &mut [u32]) {
      | ^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
 note: via `sorted`
-    --> src/main.rs:54:1
+    --> src/main.rs:66:1
      |
-  54 | fn sorted(buf: &mut [u32]) {
+  66 | fn sorted(buf: &mut [u32]) {
      | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `core::slice::<impl [u32]>::sort_unstable`
-    --> src/main.rs:55:5
+    --> src/main.rs:67:5
      |
-  55 |     buf.sort_unstable();
+  67 |     buf.sort_unstable();
      |     ^^^^^^^^^^^^^^^^^^^
 note: via `core::slice::sort::unstable::sort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/mod.rs:3152:9

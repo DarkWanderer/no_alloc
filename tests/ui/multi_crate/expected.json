@@ -14,5 +14,6 @@
         "kind": "pass"
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }

@@ -28,8 +28,11 @@
 //! `const_allocate`/`const_deallocate`/`const_make_global`, which model the
 //! const-eval heap (they are erased before codegen, but a tool that says
 //! "no allocator" should not be the one to wave through something spelled
-//! `allocate`), and the SIMD, GPU, `va_*`, and `rustc_peek` families, which
-//! this table has not audited.
+//! `allocate`); the validity assertions `assert_inhabited`,
+//! `assert_zero_valid` and `assert_mem_uninitialized_valid`, whose codegen
+//! emits a `panic_nounwind` call for an instantiation that fails the
+//! requirement (see [`is_layout_query`]); and the SIMD, GPU, `va_*`, and
+//! `rustc_peek` families, which this table has not audited.
 //!
 //! Matching is on `IntrinsicDef::name`, which is the compiler's own dispatch
 //! key for the intrinsic (`rustc_codegen_ssa` selects the lowering by this
@@ -81,14 +84,21 @@ fn is_control_or_hint(name: &str) -> bool {
 
 /// Type and layout queries. Every one of these folds to a constant, a
 /// pointer to a `static`, or a vtable field read.
+///
+/// Not `assert_inhabited`, `assert_zero_valid` or
+/// `assert_mem_uninitialized_valid`, which look like layout queries and are
+/// not: for an instantiation that fails the requirement, codegen emits a
+/// real call to the `panic_nounwind` lang item
+/// (`rustc_codegen_ssa::mir::block::codegen_panic_intrinsic`) — a Rust
+/// function this traversal never sees, since the call is synthesized after
+/// MIR. Outside `-Cpanic=immediate-abort` that reaches the allocating panic
+/// handler, so classifying them here would have been exactly the unsound
+/// "assume safe" this table exists to avoid.
 fn is_layout_query(name: &str) -> bool {
     matches!(
         name,
         "align_of"
             | "align_of_val"
-            | "assert_inhabited"
-            | "assert_mem_uninitialized_valid"
-            | "assert_zero_valid"
             | "caller_location"
             | "discriminant_value"
             | "needs_drop"
@@ -286,6 +296,24 @@ mod tests {
             assert!(
                 !intrinsic_cannot_reach_allocator(name),
                 "`{name}` must not be classified as non-allocating"
+            );
+        }
+    }
+
+    /// These read like layout queries and are not: codegen turns a failing
+    /// instantiation into a `panic_nounwind` call that the traversal cannot
+    /// see, so classifying them would let an allocating panic handler
+    /// through under plain `panic = "abort"`.
+    #[test]
+    fn validity_assertions_are_not_in_the_table() {
+        for name in [
+            "assert_inhabited",
+            "assert_mem_uninitialized_valid",
+            "assert_zero_valid",
+        ] {
+            assert!(
+                !intrinsic_cannot_reach_allocator(name),
+                "`{name}` compiles to a panic call and must keep rejecting"
             );
         }
     }

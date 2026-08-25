@@ -191,7 +191,10 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         // when the ambient environment has RUST_BACKTRACE set — machine
         // paths, crate versions and all — which would put every fixture's
         // stderr snapshot at the mercy of the developer's shell.
+        // RUST_LIB_BACKTRACE turns the same thing on by itself, so removing
+        // only RUST_BACKTRACE would leave half the hole open.
         .env_remove("RUST_BACKTRACE")
+        .env_remove("RUST_LIB_BACKTRACE")
         .env("NO_ALLOC_LOG", "off")
         // The expected.stderr snapshot is plain text; forcing color off
         // here keeps the comparison stable regardless of the caller's own
@@ -354,6 +357,7 @@ fn checker(case: &str, args: &[&str]) -> std::process::Output {
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env_remove("RUST_BACKTRACE")
+        .env_remove("RUST_LIB_BACKTRACE")
         .output()
         .expect("run cargo-no-alloc")
 }

@@ -11,8 +11,11 @@
   Adding a name asserts that the compiler's lowering of that intrinsic
   cannot call into Rust code; an intrinsic that runs a caller-supplied
   function (`catch_unwind`, `const_eval_select`, the contract checks) must
-  never be added. Unknown names reject, which is the correct default — do
-  not "complete a family" to make something pass.
+  never be added, and neither must the validity assertions
+  (`assert_inhabited` and friends), whose codegen emits a panic call for a
+  failing instantiation — those are classified per instantiation in
+  `traversal.rs` instead. Unknown names reject, which is the correct default
+  — do not "complete a family" to make something pass.
 - Iterators are only checkable under `cargo no-alloc --immediate-abort`
   ([ADR 0006](adr/0006-immediate-abort-checking-mode.md)); `docs/iterators.md`
   records what passes, measured from `examples/iterators`. If you change the

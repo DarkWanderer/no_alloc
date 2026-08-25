@@ -32,7 +32,8 @@ Options:
                      Compile everything, std included, with
                      -Cpanic=immediate-abort so panic paths lower to a bare
                      abort() and can be checked instead of rejected.
-                     Implies --build-std. See docs/iterators.md
+                     Implies --build-std; cannot be combined with `test`.
+                     See docs/iterators.md
       --warn-only    Report findings on stderr without failing the build
       --root PATH    Additionally check an unannotated function by its
                      canonical path (repeatable)
@@ -157,6 +158,17 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     ensure!(
         matches!(command.as_str(), "build" | "test"),
         "unsupported Cargo command `{command}`; expected `build` or `test`"
+    );
+    // Caught here rather than left to rustc, which fails the build several
+    // minutes into a sysroot rebuild with `building tests with panic=abort
+    // is not supported without -Zpanic_abort_tests`. Cargo's own
+    // `-Zpanic-abort-tests` does not help: it keys off the profile's panic
+    // setting, and this strategy arrives through RUSTFLAGS instead.
+    ensure!(
+        !(immediate_abort && command == "test"),
+        "`--immediate-abort` cannot be combined with `-- test`: rustc refuses to build a \
+         test harness under an abort panic strategy. Use `-- build`, which is the supported \
+         mode for meaningful results anyway (see README, \"Guarantee and limitations\")"
     );
     let cargo_option_end = cargo
         .iter()
@@ -600,6 +612,19 @@ mod tests {
         assert!(inv.build_std);
         assert!(!inv.immediate_abort);
         Ok(())
+    }
+
+    #[test]
+    fn immediate_abort_rejects_test_mode() {
+        let error = parse(&["cargo-no-alloc", "--immediate-abort", "--", "test"])
+            .expect_err("--immediate-abort -- test cannot build");
+        // The point of rejecting at parse time is the message: rustc's own
+        // failure arrives after a full sysroot rebuild and names an
+        // unrelated-looking flag.
+        assert!(error.to_string().contains("-- build"), "{error}");
+        // Neither half is a problem on its own.
+        assert!(parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"]).is_ok());
+        assert!(parse(&["cargo-no-alloc", "--", "test"]).is_ok());
     }
 
     #[test]

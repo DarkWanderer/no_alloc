@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the table still rejects, and the diagnostic names it (ADR 0005).
 - `docs/iterators.md` and `examples/iterators`: the measured non-allocating
   iterator subset, as prose and as 35 runnable roots.
+- `panic_strategy` in `report.json`, recorded from the compilation rather
+  than from the flag the user typed. A `Pass` means something different
+  under each strategy, so a persisted report that omits it cannot be read
+  back correctly (ADR 0006).
 - UI fixtures may carry a `checker-args` file to run under a non-default
   checker configuration.
 
@@ -51,9 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/ui.rs` strips inherited `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER`
   before invoking the checker, and resolves the built binary relative to the
   test executable rather than trusting `CARGO_TARGET_DIR`.
-- `tests/ui.rs` also strips `RUST_BACKTRACE`, which otherwise appended
-  anyhow's machine-specific backtrace to every fixture's stderr snapshot and
-  failed the whole matrix on developer machines that export it.
+- `tests/ui.rs` also strips `RUST_BACKTRACE` and `RUST_LIB_BACKTRACE`, which
+  otherwise appended anyhow's machine-specific backtrace to every fixture's
+  stderr snapshot and failed the whole matrix on developer machines that
+  export either one.
+- The validity assertions (`assert_inhabited`, `assert_zero_valid`,
+  `assert_mem_uninitialized_valid`) are no longer treated as unconditional
+  non-allocating leaves. Codegen emits a `panic_nounwind` call for an
+  instantiation that fails the requirement, which the traversal never sees,
+  so they are classified per instantiation with the same query codegen uses.
+- `--immediate-abort -- test` is rejected during argument parsing instead of
+  failing inside rustc with `building tests with panic=abort is not
+  supported without -Zpanic_abort_tests`, minutes into a sysroot rebuild.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "validity_assert"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

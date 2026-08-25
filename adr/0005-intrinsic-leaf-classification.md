@@ -45,6 +45,18 @@ so it is unit-testable on stable, like `parse_root_spec`).
   the case the traversal cannot see through — plus `const_allocate`,
   `const_deallocate`, `const_make_global`, and the SIMD, GPU, `va_*`, and
   `rustc_peek` families, which this table has not audited.
+- One family cannot be settled by name at all. `assert_inhabited`,
+  `assert_zero_valid` and `assert_mem_uninitialized_valid` compile to
+  nothing for a type that meets the requirement and to a call to the
+  `panic_nounwind` lang item for one that does not
+  (`rustc_codegen_ssa`'s `codegen_panic_intrinsic`) — a Rust function
+  synthesized after MIR, which the traversal would never see, and which
+  outside `-Cpanic=immediate-abort` reaches the allocating panic handler.
+  They are therefore absent from the table and classified by the traversal
+  per instantiation, using the same `check_validity_requirement` query
+  codegen uses: requirement holds, terminal; requirement fails or the layout
+  is unknown, rejected. That is per-instantiation classification in ADR
+  0001's sense, not a name-keyed leaf.
 
 The allocator leaf check still runs before the intrinsic check, for the same
 ordering reason `leaf.rs` documents: a classification must never be able to
@@ -58,11 +70,15 @@ Ordinary intrinsic-backed code is checkable in any mode: `f32::sqrt` and
 `u32::count_ones` no longer reject (`tests/ui/intrinsic_leaf`).
 
 The table is a soundness surface: each entry asserts that the compiler's
-lowering of that intrinsic cannot reach the allocator. Adding an entry is a
+lowering of that intrinsic cannot reach the allocator — including that it
+emits no Rust call, which is subtler than it looks (the validity assertions
+above were in an earlier draft of this table and had to come out). Adding an entry is a
 claim to be checked against that toolchain's lowering, not a convenience for
 making a test pass — an intrinsic that takes a function and calls it must
-never be added. `tests/ui/intrinsic_reject` pins the rejecting half, and
-`intrinsic_table.rs`'s unit tests pin the excluded names.
+never be added. `tests/ui/intrinsic_reject` pins the rejecting half,
+`intrinsic_table.rs`'s unit tests pin the excluded names, and
+`tests/ui/validity_assert` plus `iterator_immediate_abort::search` pin the
+two sides of the per-instantiation family.
 
 Because the table is keyed on names from a pinned nightly, a toolchain bump
 must re-check it: a renamed intrinsic silently becomes unclassified (safe:
