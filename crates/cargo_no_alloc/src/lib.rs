@@ -393,6 +393,24 @@ fn mixed_sysroot_panic_strategy(build_std: bool, any_immediate_abort: bool) -> b
     !build_std && any_immediate_abort
 }
 
+/// Whether the pre-flight ambient-flag guard should reject the run.
+///
+/// The escape hatch is `--build-std`, not `--immediate-abort` specifically:
+/// `--immediate-abort` always implies `--build-std` (`parse_args` sets both
+/// together), but the reverse isn't required, and a hand-set ambient
+/// strategy plus plain `--build-std` rebuilds the sysroot under the same
+/// inherited flags — exactly the case `mixed_sysroot_panic_strategy` above
+/// already treats as coherent. Gating this earlier guard on
+/// `inv.immediate_abort` instead rejected that same legitimate combination
+/// before the build ever ran.
+fn ambient_immediate_abort_needs_build_std(
+    build_std: bool,
+    encoded: Option<&str>,
+    plain: Option<&str>,
+) -> bool {
+    !build_std && declares_immediate_abort(encoded, plain)
+}
+
 fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
     // Two passes, and the order matters. The always-required flags are added
     // only when absent, so an inherited copy is left alone. The panic
@@ -560,18 +578,26 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // compiles under immediate-abort while std keeps the panic runtime it
     // was precompiled with, and the report would claim `immediate_abort` for
     // a build where std's panic paths are not compiled that way at all.
-    // `--immediate-abort` exists precisely because that combination has to
-    // be applied to both halves (ADR 0006).
+    //
+    // The escape hatch is `--build-std`, not `--immediate-abort` —
+    // `--immediate-abort` always implies `--build-std` (see `parse_args`),
+    // but the reverse isn't required: a hand-set ambient strategy plus plain
+    // `--build-std` rebuilds the sysroot under the same inherited flags and
+    // is exactly as coherent as the flag, which is what the post-build
+    // check's own `mixed_sysroot_panic_strategy` already agrees is fine.
+    // Gating on `inv.immediate_abort` here instead rejected that legitimate
+    // combination before ever reaching the build.
     ensure!(
-        inv.immediate_abort
-            || !declares_immediate_abort(
-                env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref(),
-                env::var("RUSTFLAGS").ok().as_deref(),
-            ),
-        "the environment's Rust flags already select `-Cpanic=immediate-abort`, but \
-         `--immediate-abort` was not passed. That strategy only means what the report says \
-         it means if the standard library is rebuilt with it too; pass `--immediate-abort`, \
-         which does that, instead of setting the flag by hand"
+        !ambient_immediate_abort_needs_build_std(
+            inv.build_std,
+            env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref(),
+            env::var("RUSTFLAGS").ok().as_deref(),
+        ),
+        "the environment's Rust flags already select `-Cpanic=immediate-abort`, but neither \
+         `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
+         report says it means if the standard library is rebuilt with it too; pass \
+         `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
+         strategy yourself)"
     );
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -973,6 +999,28 @@ mod tests {
 
         std::fs::remove_dir_all(directory)?;
         Ok(())
+    }
+
+    #[test]
+    fn ambient_guard_accepts_build_std_without_the_immediate_abort_flag() {
+        // The exact case this round found: `--build-std` alone, no
+        // `--immediate-abort`, ambient flags already selecting the
+        // strategy — coherent, and must not be pre-flight rejected.
+        assert!(!ambient_immediate_abort_needs_build_std(
+            true,
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        // Neither flag: still a real mix, still rejected.
+        assert!(ambient_immediate_abort_needs_build_std(
+            false,
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        // No ambient strategy at all: nothing to reject regardless of
+        // `--build-std`.
+        assert!(!ambient_immediate_abort_needs_build_std(false, None, None));
+        assert!(!ambient_immediate_abort_needs_build_std(true, None, None));
     }
 
     #[test]

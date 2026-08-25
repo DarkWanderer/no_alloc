@@ -134,6 +134,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-Cpanic=unwind` after an earlier `-Cpanic=immediate-abort` compiles
   under `unwind` and was being rejected for a strategy that was not
   actually in effect.
+- The same ambient-flag guard's escape hatch is `--build-std`, not
+  `--immediate-abort` specifically. `--immediate-abort` always implies
+  `--build-std`, but the reverse isn't required, and plain `--build-std`
+  alongside a hand-set ambient strategy rebuilds the sysroot under the same
+  inherited flags — exactly as coherent as the flag, and already treated
+  that way by the post-build check. Gating on `--immediate-abort` instead
+  rejected that legitimate combination before the build ever ran.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

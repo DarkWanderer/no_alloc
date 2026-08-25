@@ -64,7 +64,12 @@ a guarantee the build did not earn. Pre-flight, `cargo no-alloc` rejects
 `-Cpanic=immediate-abort` arriving through the ambient environment
 (`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, in any spelling rustc accepts,
 resolved by the *last* `-C panic=...` in the stream since that is the one
-rustc uses) without `--immediate-abort`, and rejects a test-harness target
+rustc uses) unless `--build-std` was also passed — `--immediate-abort`
+always implies `--build-std`, but the reverse isn't required: plain
+`--build-std` rebuilds the sysroot under the same inherited flags and is
+just as coherent as the flag, so gating this guard on `--immediate-abort`
+specifically rejected that legitimate combination too. It also rejects a
+test-harness target
 selection (`--tests`, `--all-targets`, and `-- test` itself) under
 `--immediate-abort` before paying for a sysroot rebuild rustc would refuse
 anyway (`building tests with panic=abort is not supported without
