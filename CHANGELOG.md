@@ -65,10 +65,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instantiation that fails the requirement, which the traversal never sees,
   so they are classified per instantiation with the same query codegen uses.
 - The panic strategy in `report.json` is claimed only by fragments that
-  carry verdicts. Cargo does not pass the target `RUSTFLAGS` to host units,
-  so a wrapped build script or proc macro compiles under a different
-  strategy; its empty fragment used to disagree with the real ones and drop
-  the field from the merged report entirely.
+  checked at least one instance. Cargo does not pass the target `RUSTFLAGS`
+  to host units, so a wrapped build script or proc macro compiles under a
+  different strategy; its fragment used to disagree with the real ones and
+  drop the field from the merged report entirely — including when all it
+  held was a `NotInstantiated` marker. Merging keeps the same definition: a
+  report with real verdicts but no strategy leaves the result unknown rather
+  than borrowing a sibling's, so `merge` is associative, while fragments
+  holding only markers stay neutral.
+- `cargo no-alloc` rejects an environment that already sets
+  `-Cpanic=immediate-abort` without `--immediate-abort`. Nothing rebuilds
+  the sysroot in that configuration, so the crate compiled under
+  immediate-abort while std kept its precompiled panic runtime, and the
+  report claimed `immediate_abort` for a build where std's panic paths were
+  not compiled that way.
 - `--immediate-abort` combined with a test-harness target — `-- test`, or
   `-- build` with `--tests`/`--test`/`--benches`/`--bench`/`--all-targets` —
   is rejected during argument parsing instead of failing inside rustc with

@@ -306,6 +306,25 @@ fn find_driver() -> Result<PathBuf> {
     })
 }
 
+/// Whether the caller's own flags already select the immediate-abort panic
+/// strategy. Split out from the environment so it can be tested directly:
+/// `CARGO_ENCODED_RUSTFLAGS` is `\x1f`-separated and takes precedence over
+/// `RUSTFLAGS`, exactly as Cargo reads them.
+fn declares_immediate_abort(encoded: Option<&str>, plain: Option<&str>) -> bool {
+    let selects = |flag: &str| {
+        matches!(
+            flag,
+            "-Cpanic=immediate-abort"
+                | "-C panic=immediate-abort"
+                | "--codegen=panic=immediate-abort"
+        )
+    };
+    match encoded {
+        Some(encoded) => encoded.split('\x1f').any(selects),
+        None => plain.is_some_and(|plain| plain.split_whitespace().any(selects)),
+    }
+}
+
 fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
     let extra: &[&str] = if immediate_abort {
         IMMEDIATE_ABORT_RUSTFLAGS
@@ -434,6 +453,25 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let lock = File::create(cwd.join("target/no-alloc.lock"))?;
     lock.lock_exclusive()
         .context("failed to lock target/no-alloc.lock")?;
+
+    // The strategy can arrive through the caller's own flags instead of the
+    // checker option, and then nothing rebuilds the sysroot: the crate
+    // compiles under immediate-abort while std keeps the panic runtime it
+    // was precompiled with, and the report would claim `immediate_abort` for
+    // a build where std's panic paths are not compiled that way at all.
+    // `--immediate-abort` exists precisely because that combination has to
+    // be applied to both halves (ADR 0006).
+    ensure!(
+        inv.immediate_abort
+            || !declares_immediate_abort(
+                env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref(),
+                env::var("RUSTFLAGS").ok().as_deref(),
+            ),
+        "the environment's Rust flags already select `-Cpanic=immediate-abort`, but \
+         `--immediate-abort` was not passed. That strategy only means what the report says \
+         it means if the standard library is rebuilt with it too; pass `--immediate-abort`, \
+         which does that, instead of setting the flag by hand"
+    );
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let host = host_triple()?;
@@ -690,6 +728,37 @@ mod tests {
             "--tests",
         ])?;
         Ok(())
+    }
+
+    #[test]
+    fn ambient_immediate_abort_is_recognized_in_either_flag_variable() {
+        // Encoded takes precedence over plain, as in Cargo.
+        assert!(declares_immediate_abort(
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        assert!(declares_immediate_abort(
+            Some("--cfg=x\u{1f}-Cpanic=immediate-abort"),
+            None
+        ));
+        assert!(declares_immediate_abort(
+            None,
+            Some("-Zunstable-options -Cpanic=immediate-abort")
+        ));
+        assert!(!declares_immediate_abort(
+            Some("--cfg=x"),
+            Some("-Cpanic=immediate-abort")
+        ));
+        // Neighbouring strategies are not this one.
+        assert!(!declares_immediate_abort(None, Some("-Cpanic=abort")));
+        assert!(!declares_immediate_abort(None, Some("-Cpanic=unwind")));
+        assert!(!declares_immediate_abort(None, None));
+        // A space-separated `-C panic=...` survives only in the plain form,
+        // where Cargo splits on whitespace; the encoded form keeps it whole.
+        assert!(declares_immediate_abort(
+            Some("-C panic=immediate-abort"),
+            None
+        ));
     }
 
     #[test]

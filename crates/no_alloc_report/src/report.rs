@@ -89,7 +89,28 @@ impl Report {
     pub fn merge(reports: impl IntoIterator<Item = Self>) -> Self {
         let mut merged = Self::default();
         let mut strategies = std::collections::BTreeSet::new();
+        // A report that carries verdicts but no strategy makes the result
+        // unknowable, and must not be quietly relabelled by a sibling that
+        // does carry one — that would put a strategy on roots whose panic
+        // semantics nobody recorded (a legacy report, or an earlier merge
+        // that already found a conflict). Keeping it also makes `merge`
+        // associative: nested merges give the same answer as one flat one.
+        //
+        // "Carries verdicts" means a root that was actually checked, the
+        // same test the driver applies before claiming a strategy at all. A
+        // `NotInstantiated` root records a marker nobody checked here, so a
+        // fragment holding only those has nothing to say about the strategy
+        // in either direction — and a cross-crate generic produces exactly
+        // such a fragment in the defining crate on every ordinary build.
+        let mut unknown_over_verdicts = false;
         for report in reports {
+            let checked_something = report
+                .roots
+                .iter()
+                .any(|root| !matches!(root.verdict, Verdict::NotInstantiated));
+            if report.panic_strategy.is_none() && checked_something {
+                unknown_over_verdicts = true;
+            }
             merged.roots.extend(report.roots);
             merged.selection_errors.extend(report.selection_errors);
             strategies.extend(report.panic_strategy);
@@ -98,7 +119,7 @@ impl Report {
         // than exactly one answer means the report cannot claim a strategy.
         let mut found = strategies.into_iter();
         merged.panic_strategy = match (found.next(), found.next()) {
-            (single, None) => single,
+            (single, None) if !unknown_over_verdicts => single,
             _ => None,
         };
         merged.roots.sort_by(|a, b| {
@@ -277,6 +298,62 @@ mod tests {
             None
         );
         assert_eq!(Report::merge([]).panic_strategy, None);
+    }
+
+    /// A report with verdicts and no strategy is not the same as a rootless
+    /// fragment: the first says "these roots' panic semantics are
+    /// unrecorded", and letting a sibling supply one would put a label on
+    /// verdicts that never had it. It also keeps `merge` associative.
+    #[test]
+    fn merge_does_not_relabel_verdicts_whose_strategy_is_unknown() {
+        let root = RootVerdict {
+            root: "a".into(),
+            instance: "a".into(),
+            verdict: Verdict::Pass,
+        };
+        let known = Report {
+            roots: vec![root.clone()],
+            panic_strategy: Some(PanicStrategy::ImmediateAbort),
+            ..Report::default()
+        };
+        let unknown_with_roots = Report {
+            roots: vec![root],
+            panic_strategy: None,
+            ..Report::default()
+        };
+        // A legacy or already-conflicted report poisons the claim...
+        assert_eq!(
+            Report::merge([known.clone(), unknown_with_roots.clone()]).panic_strategy,
+            None
+        );
+        // ...while a rootless fragment (a wrapped build script) does not.
+        assert_eq!(
+            Report::merge([known.clone(), Report::default()]).panic_strategy,
+            Some(PanicStrategy::ImmediateAbort)
+        );
+        // Nor does one holding only `NotInstantiated` markers, which is what
+        // the defining crate of a cross-crate generic contributes on every
+        // ordinary build (`tests/ui/cross_crate_generic`).
+        let only_markers = Report {
+            roots: vec![RootVerdict {
+                root: "dependency::root".into(),
+                instance: "dependency::root".into(),
+                verdict: Verdict::NotInstantiated,
+            }],
+            panic_strategy: None,
+            ..Report::default()
+        };
+        assert_eq!(
+            Report::merge([known.clone(), only_markers]).panic_strategy,
+            Some(PanicStrategy::ImmediateAbort)
+        );
+        // Associativity: nesting the same inputs gives the same answer.
+        let nested = Report::merge([Report::merge([known.clone(), unknown_with_roots.clone()])]);
+        assert_eq!(nested.panic_strategy, None);
+        assert_eq!(
+            nested.panic_strategy,
+            Report::merge([known, unknown_with_roots]).panic_strategy
+        );
     }
 
     /// The field is skipped when absent, so a report written before it
