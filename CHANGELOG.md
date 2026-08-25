@@ -69,9 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a wrapped build script or proc macro compiles under a different
   strategy; its empty fragment used to disagree with the real ones and drop
   the field from the merged report entirely.
-- `--immediate-abort -- test` is rejected during argument parsing instead of
-  failing inside rustc with `building tests with panic=abort is not
-  supported without -Zpanic_abort_tests`, minutes into a sysroot rebuild.
+- `--immediate-abort` combined with a test-harness target — `-- test`, or
+  `-- build` with `--tests`/`--test`/`--benches`/`--bench`/`--all-targets` —
+  is rejected during argument parsing instead of failing inside rustc with
+  `building tests with panic=abort is not supported without
+  -Zpanic_abort_tests`, minutes into a sysroot rebuild.
+- The float entries in the intrinsic table match the exact spelling each
+  name has in the intrinsic set. Normalizing away trailing underscores meant
+  a future `sqrt_f32` or `round_ties_evenf64` would have been accepted
+  without anyone auditing its lowering, which is not what an allowlist is
+  for. All 99 float names in the pinned toolchain still match.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

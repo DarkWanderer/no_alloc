@@ -205,6 +205,12 @@ fn is_integer_arithmetic(name: &str) -> bool {
 /// than four spellings of every operation. These lower to a machine
 /// instruction, an `llvm.*` intrinsic, or — for `f16`/`f128` on targets
 /// without hardware support — a `compiler_builtins` soft-float symbol.
+///
+/// Each base is matched against the exact spelling it has in the intrinsic
+/// set, including whether an underscore separates it from the width, so
+/// only the audited names match: `sqrtf32` yes, a future `sqrt_f32` no.
+/// Normalizing the two spellings together would quietly admit a name nobody
+/// has looked at, which is the opposite of what an allowlist is for.
 fn is_float_arithmetic(name: &str) -> bool {
     if matches!(
         name,
@@ -222,37 +228,38 @@ fn is_float_arithmetic(name: &str) -> bool {
     ) {
         return true;
     }
-    let Some(base) = ["f16", "f32", "f64", "f128"]
-        .iter()
-        .find_map(|width| name.strip_suffix(width))
-    else {
-        return false;
-    };
-    matches!(
-        base.trim_end_matches('_'),
-        "ceil"
-            | "copysign"
-            | "cos"
-            | "exp"
-            | "exp2"
-            | "floor"
-            | "fma"
-            | "fmuladd"
-            | "log"
-            | "log10"
-            | "log2"
-            | "maximum"
-            | "maximum_number_nsz"
-            | "minimum"
-            | "minimum_number_nsz"
-            | "pow"
-            | "powi"
-            | "round"
-            | "round_ties_even"
-            | "sin"
-            | "sqrt"
-            | "trunc"
-    )
+    ["f16", "f32", "f64", "f128"].iter().any(|width| {
+        name.strip_suffix(width).is_some_and(|base| {
+            matches!(
+                base,
+                // `sqrtf32`
+                "ceil"
+                    | "copysign"
+                    | "cos"
+                    | "exp"
+                    | "exp2"
+                    | "floor"
+                    | "fma"
+                    | "fmuladd"
+                    | "log"
+                    | "log10"
+                    | "log2"
+                    | "maximum"
+                    | "minimum"
+                    | "pow"
+                    | "powi"
+                    | "round"
+                    | "sin"
+                    | "sqrt"
+                    | "trunc"
+                    // `round_ties_even_f32` — the underscore belongs to the
+                    // name, so it is matched rather than trimmed away.
+                    | "maximum_number_nsz_"
+                    | "minimum_number_nsz_"
+                    | "round_ties_even_"
+            )
+        })
+    })
 }
 
 /// Atomic read-modify-write operations and fences. Each is one instruction
@@ -360,9 +367,28 @@ mod tests {
         }
     }
 
+    /// The table is an allowlist, so a name that merely *resembles* an
+    /// audited one must not match. A future toolchain that spells an
+    /// intrinsic `sqrt_f32` is introducing a lowering nobody here has
+    /// looked at, and it should reject until someone does.
+    #[test]
+    fn near_miss_spellings_do_not_match() {
+        for name in [
+            "sqrt_f32",
+            "sqrt__f32",
+            "round_ties_evenf64",
+            "round_ties_even__f64",
+            "minimum_number_nszf32",
+            "_sqrtf32",
+        ] {
+            assert!(!intrinsic_cannot_reach_allocator(name), "{name}");
+        }
+    }
+
     #[test]
     fn multi_word_base_names_keep_their_underscores() {
         assert!(intrinsic_cannot_reach_allocator("round_ties_even_f64"));
         assert!(intrinsic_cannot_reach_allocator("maximum_number_nsz_f32"));
+        assert!(intrinsic_cannot_reach_allocator("minimum_number_nsz_f128"));
     }
 }

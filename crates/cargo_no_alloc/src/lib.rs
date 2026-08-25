@@ -56,6 +56,11 @@ workspace (pass --all-crates to instrument it).";
 /// whole manifest nightly-only (ADR 0002's zero-footprint rule).
 const IMMEDIATE_ABORT_RUSTFLAGS: &[&str] = &["-Zunstable-options", "-Cpanic=immediate-abort"];
 
+/// Cargo target selections that pull in libtest-harness targets, which
+/// cannot be built under `--immediate-abort` (see the `-- test` rejection).
+const TEST_HARNESS_SELECTORS: &[&str] =
+    &["--tests", "--test", "--benches", "--bench", "--all-targets"];
+
 const REQUIRED_RUSTFLAGS: &[&str] = &[
     "--cfg=no_alloc_check",
     "--check-cfg=cfg(no_alloc_check)",
@@ -181,6 +186,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 && arg != "--target-dir"
                 && !arg.starts_with("--target-dir="),
             "Cargo target options conflict with no_alloc's dedicated checker target"
+        );
+        // The same wall `-- test` hits, reached through target selection
+        // instead of the subcommand: these all compile libtest harnesses,
+        // which rustc will not build under an abort panic strategy.
+        let flag = arg.split('=').next().unwrap_or(arg);
+        ensure!(
+            !immediate_abort || !TEST_HARNESS_SELECTORS.contains(&flag),
+            "`--immediate-abort` cannot build test-harness targets (`{flag}`): rustc refuses \
+             to build a test harness under an abort panic strategy. Drop the target selection, \
+             or check those targets without `--immediate-abort`"
         );
     }
     roots.sort();
@@ -625,6 +640,56 @@ mod tests {
         // Neither half is a problem on its own.
         assert!(parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"]).is_ok());
         assert!(parse(&["cargo-no-alloc", "--", "test"]).is_ok());
+    }
+
+    #[test]
+    fn immediate_abort_rejects_test_harness_target_selection() -> Result<()> {
+        // `build --tests` reaches the same rustc failure as `-- test`, just
+        // through target selection, and just as far into a sysroot rebuild.
+        for selection in [
+            vec!["--tests"],
+            vec!["--all-targets"],
+            vec!["--test", "integration"],
+            vec!["--test=integration"],
+            vec!["--benches"],
+            vec!["--bench=throughput"],
+        ] {
+            let mut args = vec!["cargo-no-alloc", "--immediate-abort", "--", "build"];
+            args.extend(selection.iter().copied());
+            let error = parse(&args).expect_err(&format!("{selection:?} must be rejected"));
+            assert!(error.to_string().contains("test-harness"), "{error}");
+            // Only `--immediate-abort` has the problem; plain runs still build them.
+            let mut plain = vec!["cargo-no-alloc", "--", "build"];
+            plain.extend(selection.iter().copied());
+            assert!(parse(&plain).is_ok(), "{selection:?} without the flag");
+        }
+        // Target selections that build no harness stay accepted.
+        assert!(parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--lib"
+        ])
+        .is_ok());
+        assert!(parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--examples"
+        ])
+        .is_ok());
+        // Arguments after the test-runner separator are not target selection.
+        parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--",
+            "--tests",
+        ])?;
+        Ok(())
     }
 
     #[test]
