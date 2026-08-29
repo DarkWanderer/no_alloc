@@ -45,8 +45,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }
 Run the checker with Cargo arguments after `--`:
 
 ```text
-cargo no-alloc [--all-crates] [--build-std] [--warn-only]
-               [--root PATH]... -- [build|test] [CARGO_ARGS...]
+cargo no-alloc [--all-crates] [--build-std] [--immediate-abort]
+               [--warn-only] [--root PATH]... -- [build|test] [CARGO_ARGS...]
 ```
 
 `build` is the default. `check` is rejected because it does not produce the
@@ -65,7 +65,10 @@ instrument every crate in the build (`RUSTC_WRAPPER`) instead.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
-written to `target/no-alloc/report.json`.
+written to `target/no-alloc/report.json`, and records the panic strategy the
+build used (`"panic_strategy": "unwind" | "abort" | "immediate_abort"`)
+because a `Pass` means something different under each — see "Guarantee and
+limitations".
 
 Every invocation runs `cargo clean` on the checker's target first, so
 **every `cargo no-alloc` run is a from-scratch rebuild**, never an
@@ -74,14 +77,26 @@ configuration change can never be hidden by Cargo's build cache (see
 [`docs/design.md`](docs/design.md)) — but it means every run pays full
 compile time, not just the cost of what changed.
 
-See [`examples/basic`](examples/basic) for a runnable example.
+`--immediate-abort` rebuilds the crate and the standard library with
+`-Cpanic=immediate-abort` (implying `--build-std`, and incompatible with
+`-- test`, which rustc will not build under an abort strategy), which is
+what makes iterator-shaped code checkable at all — see
+[`docs/iterators.md`](docs/iterators.md) and
+[ADR 0006](adr/0006-immediate-abort-checking-mode.md).
+
+See [`examples/basic`](examples/basic) for a runnable example, and
+[`examples/iterators`](examples/iterators) for the 35 iterator patterns
+behind `docs/iterators.md`.
 
 ## Guarantee and limitations
 
 Analysis starts from each selected monomorphized `Instance`, follows resolved
-calls, tail calls, and drop glue, and detects allocator, deallocator,
-reallocator, and zeroed-allocator terminals. Function pointers, virtual
-dispatch, foreign calls without MIR, and inline assembly are rejected. A
+calls, tail calls, compiler-generated shims, and drop glue, and detects
+allocator, deallocator, reallocator, and zeroed-allocator terminals.
+Function pointers, virtual dispatch, foreign calls without MIR, inline
+assembly, and intrinsics outside the non-allocating intrinsic table are
+rejected ([ADR 0005](adr/0005-intrinsic-leaf-classification.md),
+[ADR 0007](adr/0007-shim-and-fn-item-resolution.md)). A
 `Violation` chain names *a* reachable allocator path, not necessarily the one
 actually taken at runtime — the DFS reports whichever call sequence it finds
 first among several that may exist; this is correct for a reachability
@@ -100,17 +115,38 @@ plain `panic=abort` still calls `panic_fmt` and the `#[panic_handler]`
 (which, with `std`, formats and prints — i.e. allocates) before the process
 aborts. It is allowed because allocation reachable only through a panic, an
 unwind-terminate, or an unwind-resume path is out of scope for this
-guarantee, not because that allocation has been ruled out. The one way to
-remove the call entirely is `panic_immediate_abort`, a `-Zbuild-std` std
-feature that compiles every panic to a bare `abort()` with no handler call.
-Under `panic=unwind`, `Assert` is rejected outright instead, on the usual
+guarantee, not because that allocation has been ruled out. Under
+`panic=unwind`, `Assert` is rejected outright instead, on the usual
 reject-don't-assume grounds — see [ADR 0003](adr/0003-reject-unresolved-edges.md)
 for the full terminator classification and rationale.
 
+**`--immediate-abort` is the exception, and the stronger guarantee.** It
+compiles the crate and the standard library with `-Cpanic=immediate-abort`,
+where every panic — `Assert` included — lowers to a bare `abort()` with no
+handler call. The traversal then walks panic paths as ordinary edges and
+finds `core::intrinsics::abort` at the end of them, so in that mode there is
+no panic-path carve-out at all. It costs a full sysroot rebuild per run. See
+[ADR 0006](adr/0006-immediate-abort-checking-mode.md).
+
 In practice this means most indexing and arithmetic in debug builds — which
-lower to an `Assert` — reject under `panic=unwind` (Rust's default); set
-`panic = "abort"` in `[profile.*]` for realistic code to pass at all. See
-[`examples/basic`](examples/basic) for the equivalent tradeoff with iterators.
+lower to an `Assert` — reject under `panic=unwind` (Rust's default), and
+`panic = "abort"` in `[profile.*]` is the minimum for anything to pass. It is
+not enough for iterators: the standard library reaches the panic machinery
+through ordinary calls as well as `Assert` terminators, and those reject
+until the sysroot is rebuilt. Measured over 35 iterator patterns, `abort`
+passes none of them and `--immediate-abort` passes 33 — see
+[`docs/iterators.md`](docs/iterators.md).
+
+**The boundary is MIR, not the machine code.** The analysis follows the
+calls the compiler puts in MIR; it does not see the ones the backend
+synthesizes from it. A large struct move becomes a `memcpy` call, `f32::powf`
+becomes a `powf` call, `f128` arithmetic becomes a `compiler_builtins` call —
+none of which appear as MIR terminators. Those symbols are assumed to be the
+platform's. A program that defines one of them itself, in Rust, and
+allocates there (`#[no_mangle] extern "C" fn powf`) defeats the analysis, and
+it does so whether or not any intrinsic is involved. See
+[ADR 0005](adr/0005-intrinsic-leaf-classification.md) for the measurement
+and the alternative.
 
 **`cargo no-alloc -- test` is not usable for realistic code.** Cargo ignores
 `[profile.*] panic` for the `test` profile — it always builds tests under

@@ -41,9 +41,24 @@ impl Callbacks for NoAllocCallbacks {
         let discovery = no_alloc_analysis::roots::discover(tcx);
         let mut report = Report {
             roots: Vec::new(),
+            // Claimed below, and only if this compilation actually produced
+            // verdicts: Cargo does not pass the target `RUSTFLAGS` to host
+            // units (build scripts, proc macros), so a wrapped host unit
+            // compiles under a different panic strategy than the code being
+            // checked. Letting its empty fragment state one would make every
+            // merge in a workspace with a build script disagree with itself
+            // and drop the field entirely.
+            panic_strategy: None,
             selection_errors: discovery.selection_errors,
         };
         let mut any_hard_error = false;
+        // Only a *checked instance* licenses a strategy claim. A
+        // `NotInstantiated` root is a marker this compilation found and did
+        // not check, which a wrapped host unit can have as easily as a
+        // target one — and the host unit compiles under different panic
+        // flags, so letting it claim a strategy reintroduces the
+        // disagreement that empties the field.
+        let mut checked_an_instance = false;
 
         for root in discovery.roots {
             match root {
@@ -56,6 +71,7 @@ impl Callbacks for NoAllocCallbacks {
                     });
                 }
                 DiscoveredRoot::Instance { root, instance } => {
+                    checked_an_instance = true;
                     let root_path = no_alloc_analysis::roots::root_path(tcx, root);
                     let checked = no_alloc_analysis::traversal::check_instance(tcx, instance);
                     if no_alloc_analysis::diagnostics::emit(tcx, &checked, warn_only) {
@@ -68,6 +84,10 @@ impl Callbacks for NoAllocCallbacks {
                     });
                 }
             }
+        }
+
+        if checked_an_instance {
+            report.panic_strategy = Some(no_alloc_analysis::traversal::panic_strategy(tcx));
         }
 
         let fragment_dir = std::env::var_os("NO_ALLOC_FRAGMENT_DIR")

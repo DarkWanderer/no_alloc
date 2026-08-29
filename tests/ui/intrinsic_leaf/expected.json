@@ -1,0 +1,19 @@
+{
+  "roots": [
+    {
+      "root": "intrinsic_leaf::bits_root",
+      "instance": "bits_root",
+      "verdict": {
+        "kind": "pass"
+      }
+    },
+    {
+      "root": "intrinsic_leaf::float_root",
+      "instance": "float_root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ],
+  "panic_strategy": "abort"
+}

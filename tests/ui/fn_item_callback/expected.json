@@ -1,0 +1,12 @@
+{
+  "roots": [
+    {
+      "root": "fn_item_callback::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ],
+  "panic_strategy": "abort"
+}

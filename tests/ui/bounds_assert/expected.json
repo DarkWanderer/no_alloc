@@ -15,5 +15,6 @@
         "reason": "assertion may invoke the panic handler when panic=unwind"
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }

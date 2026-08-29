@@ -8,6 +8,7 @@ extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
+extern crate rustc_target;
 
 pub mod diagnostics;
 pub mod leaf;

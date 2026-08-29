@@ -20,5 +20,6 @@
         "reason": "no statically available MIR body for this callee"
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }

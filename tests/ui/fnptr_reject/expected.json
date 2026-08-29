@@ -15,5 +15,6 @@
         "reason": "callee is a function pointer, not a statically resolvable body"
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }

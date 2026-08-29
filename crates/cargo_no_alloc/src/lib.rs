@@ -1,6 +1,6 @@
 use anyhow::{bail, ensure, Context, Result};
 use fs2::FileExt;
-use no_alloc_report::{parse_root_spec, Report, ReportFragment, Verdict};
+use no_alloc_report::{parse_root_spec, PanicStrategy, Report, ReportFragment, Verdict};
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
@@ -28,6 +28,12 @@ Options:
       --all-crates   Instrument every crate in the build (RUSTC_WRAPPER),
                      not just workspace members (RUSTC_WORKSPACE_WRAPPER)
       --build-std    Pass -Zbuild-std to Cargo
+      --immediate-abort
+                     Compile everything, std included, with
+                     -Cpanic=immediate-abort so panic paths lower to a bare
+                     abort() and can be checked instead of rejected.
+                     Implies --build-std; cannot be combined with `test`.
+                     See docs/iterators.md
       --warn-only    Report findings on stderr without failing the build
       --root PATH    Additionally check an unannotated function by its
                      canonical path (repeatable)
@@ -41,6 +47,27 @@ const ZERO_ROOTS_WARNING: &str = "warning: no_alloc checked 0 root instances \
 — nothing was analyzed. This usually means either no `#[no_alloc]` marker \
 was reached while building, or the marker lives in a crate outside the \
 workspace (pass --all-crates to instrument it).";
+
+/// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
+/// unstable, hence the accompanying `-Zunstable-options`. Passing it here
+/// rather than asking users to set `[profile.dev] panic = "immediate-abort"`
+/// keeps the checked crate's own manifest stable-buildable: the manifest key
+/// requires `cargo-features = ["panic-immediate-abort"]`, which makes the
+/// whole manifest nightly-only (ADR 0002's zero-footprint rule).
+const IMMEDIATE_ABORT_RUSTFLAGS: &[&str] = &["-Zunstable-options", "-Cpanic=immediate-abort"];
+
+/// Cargo target selections that always pull in a libtest harness, which
+/// cannot be built under `--immediate-abort` (see the `-- test` rejection).
+///
+/// Only these two: both include the unit-test targets of the lib and bins,
+/// which use libtest whatever the manifest says. `--test`/`--bench` name one
+/// target and `--benches` selects only bench targets — any of which may set
+/// `harness = false` (as this repository's own benchmarks do) and then build
+/// perfectly well under an abort strategy. Rejecting those would be a false
+/// positive, and telling them apart needs per-target metadata this wrapper
+/// does not read; the observed-strategy check after the build is what keeps
+/// a mixed configuration from being *reported* either way.
+const TEST_HARNESS_SELECTORS: &[&str] = &["--tests", "--all-targets"];
 
 const REQUIRED_RUSTFLAGS: &[&str] = &[
     "--cfg=no_alloc_check",
@@ -56,6 +83,7 @@ const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 #[derive(Debug, PartialEq, Eq)]
 struct Invocation {
     build_std: bool,
+    immediate_abort: bool,
     all_crates: bool,
     warn_only: bool,
     roots: Vec<String>,
@@ -83,6 +111,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     }
 
     let mut build_std = false;
+    let mut immediate_abort = false;
     let mut all_crates = false;
     let mut warn_only = false;
     let mut roots = Vec::new();
@@ -94,6 +123,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 break;
             }
             "--build-std" => build_std = true,
+            // Implies --build-std: the panic strategy has to match all the
+            // way down, and the precompiled sysroot was not built with it.
+            "--immediate-abort" => {
+                immediate_abort = true;
+                build_std = true;
+            }
             "--all-crates" => all_crates = true,
             "--warn-only" => warn_only = true,
             // A cargo subcommand is expected to answer these regardless of
@@ -137,6 +172,17 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
         matches!(command.as_str(), "build" | "test"),
         "unsupported Cargo command `{command}`; expected `build` or `test`"
     );
+    // Caught here rather than left to rustc, which fails the build several
+    // minutes into a sysroot rebuild with `building tests with panic=abort
+    // is not supported without -Zpanic_abort_tests`. Cargo's own
+    // `-Zpanic-abort-tests` does not help: it keys off the profile's panic
+    // setting, and this strategy arrives through RUSTFLAGS instead.
+    ensure!(
+        !(immediate_abort && command == "test"),
+        "`--immediate-abort` cannot be combined with `-- test`: rustc refuses to build a \
+         test harness under an abort panic strategy. Use `-- build`, which is the supported \
+         mode for meaningful results anyway (see README, \"Guarantee and limitations\")"
+    );
     let cargo_option_end = cargo
         .iter()
         .position(|arg| arg == "--")
@@ -149,11 +195,22 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 && !arg.starts_with("--target-dir="),
             "Cargo target options conflict with no_alloc's dedicated checker target"
         );
+        // The same wall `-- test` hits, reached through target selection
+        // instead of the subcommand: these all compile libtest harnesses,
+        // which rustc will not build under an abort panic strategy.
+        let flag = arg.split('=').next().unwrap_or(arg);
+        ensure!(
+            !immediate_abort || !TEST_HARNESS_SELECTORS.contains(&flag),
+            "`--immediate-abort` cannot build test-harness targets (`{flag}`): rustc refuses \
+             to build a test harness under an abort panic strategy. Drop the target selection, \
+             or check those targets without `--immediate-abort`"
+        );
     }
     roots.sort();
     roots.dedup();
     Ok(ParsedArgs::Run(Invocation {
         build_std,
+        immediate_abort,
         all_crates,
         warn_only,
         roots,
@@ -257,28 +314,170 @@ fn find_driver() -> Result<PathBuf> {
     })
 }
 
-fn add_required_rustflags(command: &mut Command) {
+/// The value of the last `-C panic=...` setting in a token stream, in the
+/// order rustc would see them. `-Cpanic` is last-wins, so a stream ending in
+/// `-Cpanic=unwind` compiles under `unwind` even if `immediate-abort`
+/// appeared earlier — checking "does this value appear anywhere" instead of
+/// "which one wins" flagged an effectively-`unwind` environment as if it
+/// selected immediate-abort, which is how this was found.
+///
+/// Handles both the joined spelling (`-Cpanic=val`, `--codegen=panic=val`)
+/// and the two-token form `rustc -C help` also documents (`-C panic=val`,
+/// `--codegen panic=val`) — both reach rustc identically. A bare `-C`/
+/// `--codegen` matches only the two-token form's first slot, checked before
+/// the joined-prefix strip so it can't be mistaken for a (nonsensical) empty
+/// joined value.
+fn last_panic_setting<'a>(tokens: &[&'a str]) -> Option<&'a str> {
+    let mut last = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if matches!(token, "-C" | "--codegen") {
+            if let Some(value) = tokens
+                .get(index + 1)
+                .and_then(|next| next.strip_prefix("panic="))
+            {
+                last = Some(value);
+                index += 1;
+            }
+        } else if let Some(rest) = token
+            .strip_prefix("-C")
+            .or_else(|| token.strip_prefix("--codegen"))
+        {
+            if let Some(value) = rest.trim_start_matches('=').strip_prefix("panic=") {
+                last = Some(value);
+            }
+        }
+        index += 1;
+    }
+    last
+}
+
+/// Whether the caller's own flags currently select the immediate-abort
+/// panic strategy — the *last* one, since that is the one rustc uses. Split
+/// out from the environment so it can be tested directly:
+/// `CARGO_ENCODED_RUSTFLAGS` is `\x1f`-separated and takes precedence over
+/// `RUSTFLAGS`, exactly as Cargo reads them.
+fn declares_immediate_abort(encoded: Option<&str>, plain: Option<&str>) -> bool {
+    let raw: Vec<&str> = match encoded {
+        Some(encoded) => encoded.split('\x1f').collect(),
+        None => plain.unwrap_or_default().split_whitespace().collect(),
+    };
+    // An encoded entry can itself carry the space, so flatten before pairing
+    // rather than trusting the separator to have split every token.
+    let tokens: Vec<&str> = raw
+        .iter()
+        .flat_map(|token| token.split_whitespace())
+        .collect();
+    last_panic_setting(&tokens) == Some("immediate-abort")
+}
+
+/// Whether the build the driver just ran mixes an immediate-abort crate
+/// with a standard library that was not rebuilt to match.
+///
+/// What makes an observed `ImmediateAbort` strategy safe is that the
+/// sysroot was rebuilt *in this build* — which is what `--build-std` does:
+/// Cargo applies the same profile and the same `RUSTFLAGS` to those units
+/// too. So `--build-std` with the strategy set by hand (the manifest, a
+/// `config.toml`, `--profile`) is coherent and not flagged; only an
+/// immediate-abort crate built against the untouched precompiled sysroot
+/// is a mix worth rejecting.
+///
+/// `any_immediate_abort` comes from scanning the raw fragments
+/// (`aggregate`), not from `report.panic_strategy`: the merged field goes to
+/// `None` on any disagreement between fragments, which would silently hide
+/// exactly the mix this check exists to catch (a target-specific config
+/// selecting the strategy for the checked crate while a wrapped host unit
+/// compiles under something else).
+fn mixed_sysroot_panic_strategy(build_std: bool, any_immediate_abort: bool) -> bool {
+    !build_std && any_immediate_abort
+}
+
+/// Marks a report so that `Report::is_success()` says `false` on it, the
+/// instant a mixed sysroot is detected — before the report is written to
+/// disk. Without this, `report.json` could show every root passing (a
+/// trivial function has no reason to care what std's panic strategy is)
+/// while the process that produced it exits nonzero: a tool reading the
+/// file directly, rather than this process's own exit code, would see a
+/// false success. `selection_errors` is the existing channel for "this
+/// report should not be trusted as-is" (already used for an unmatched
+/// `--root`), so this reuses it rather than adding a second one.
+fn taint_report_for_mixed_sysroot(report: &mut Report, mixed_sysroot: bool) {
+    if mixed_sysroot {
+        report.selection_errors.push(
+            "this build compiled under `-Cpanic=immediate-abort` without rebuilding the \
+             standard library (`--build-std`); every verdict above was produced against a \
+             sysroot whose panic runtime does not match the strategy claimed"
+                .to_owned(),
+        );
+    }
+}
+
+/// Whether the pre-flight ambient-flag guard should reject the run.
+///
+/// The escape hatch is `--build-std`, not `--immediate-abort` specifically:
+/// `--immediate-abort` always implies `--build-std` (`parse_args` sets both
+/// together), but the reverse isn't required, and a hand-set ambient
+/// strategy plus plain `--build-std` rebuilds the sysroot under the same
+/// inherited flags — exactly the case `mixed_sysroot_panic_strategy` above
+/// already treats as coherent. Gating this earlier guard on
+/// `inv.immediate_abort` instead rejected that same legitimate combination
+/// before the build ever ran.
+fn ambient_immediate_abort_needs_build_std(
+    build_std: bool,
+    encoded: Option<&str>,
+    plain: Option<&str>,
+) -> bool {
+    !build_std && declares_immediate_abort(encoded, plain)
+}
+
+fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
+    // Two passes, and the order matters. The always-required flags are added
+    // only when absent, so an inherited copy is left alone. The panic
+    // strategy is then appended unconditionally, because `-Cpanic` is
+    // last-wins: "already present somewhere" is not the same as "in effect",
+    // and an inherited `-Cpanic=immediate-abort ... -Cpanic=unwind` would
+    // otherwise satisfy a presence test while the build ran under unwind,
+    // with `--immediate-abort` quietly not happening. Repeating the flag is
+    // harmless; being outvoted by it is not.
+    let panic_strategy: &[&str] = if immediate_abort {
+        IMMEDIATE_ABORT_RUSTFLAGS
+    } else {
+        &[]
+    };
     if let Some(encoded) = env::var_os("CARGO_ENCODED_RUSTFLAGS") {
         let mut value = encoded.to_string_lossy().into_owned();
         let existing: HashSet<String> = value.split('\x1f').map(str::to_owned).collect();
+        let push = |flag: &str, value: &mut String| {
+            if !value.is_empty() {
+                value.push('\x1f');
+            }
+            value.push_str(flag);
+        };
         for flag in REQUIRED_RUSTFLAGS {
             if !existing.contains(*flag) {
-                if !value.is_empty() {
-                    value.push('\x1f');
-                }
-                value.push_str(flag);
+                push(flag, &mut value);
             }
+        }
+        for flag in panic_strategy {
+            push(flag, &mut value);
         }
         command.env("CARGO_ENCODED_RUSTFLAGS", value);
     } else {
         let mut value = env::var("RUSTFLAGS").unwrap_or_default();
+        let push = |flag: &str, value: &mut String| {
+            if !value.is_empty() {
+                value.push(' ');
+            }
+            value.push_str(flag);
+        };
         for flag in REQUIRED_RUSTFLAGS {
             if !value.split_whitespace().any(|existing| existing == *flag) {
-                if !value.is_empty() {
-                    value.push(' ');
-                }
-                value.push_str(flag);
+                push(flag, &mut value);
             }
+        }
+        for flag in panic_strategy {
+            push(flag, &mut value);
         }
         command.env("RUSTFLAGS", value);
     }
@@ -309,7 +508,18 @@ fn clear_checker_artifacts(
     Ok(())
 }
 
-fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<Report> {
+/// `Report::merge`'s agreed-strategy answer is the right thing for
+/// `report.json` to state (ADR 0006) — it is silent rather than guessing
+/// when fragments disagree. It is the wrong question for this wrapper's own
+/// safety net, though: a target-specific `.cargo/config.toml` can compile
+/// the checked crate under `ImmediateAbort` while a wrapped host unit (a
+/// build script with a checked root of its own) compiles under `Unwind`,
+/// and the disagreement collapses the merged strategy to `None` — silently
+/// clearing the one signal `mixed_sysroot_panic_strategy` needs to catch
+/// exactly that case. So this is answered directly from the fragments,
+/// before merging can lose it: "did *any* verdict-bearing fragment observe
+/// `ImmediateAbort`", regardless of what the others said.
+fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<(Report, bool)> {
     let mut reports = Vec::new();
     let mut matched = HashSet::new();
     if fragment_dir.is_dir() {
@@ -325,6 +535,9 @@ fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<Report> {
             reports.push(fragment.report);
         }
     }
+    let any_immediate_abort = reports.iter().any(|report| {
+        report.checked_an_instance() && report.panic_strategy == Some(PanicStrategy::ImmediateAbort)
+    });
     let mut report = Report::merge(reports);
     for root in requested {
         if !matched.contains(root) {
@@ -335,7 +548,7 @@ fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<Report> {
     }
     report.selection_errors.sort();
     report.selection_errors.dedup();
-    Ok(report)
+    Ok((report, any_immediate_abort))
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
@@ -380,6 +593,33 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     lock.lock_exclusive()
         .context("failed to lock target/no-alloc.lock")?;
 
+    // The strategy can arrive through the caller's own flags instead of the
+    // checker option, and then nothing rebuilds the sysroot: the crate
+    // compiles under immediate-abort while std keeps the panic runtime it
+    // was precompiled with, and the report would claim `immediate_abort` for
+    // a build where std's panic paths are not compiled that way at all.
+    //
+    // The escape hatch is `--build-std`, not `--immediate-abort` —
+    // `--immediate-abort` always implies `--build-std` (see `parse_args`),
+    // but the reverse isn't required: a hand-set ambient strategy plus plain
+    // `--build-std` rebuilds the sysroot under the same inherited flags and
+    // is exactly as coherent as the flag, which is what the post-build
+    // check's own `mixed_sysroot_panic_strategy` already agrees is fine.
+    // Gating on `inv.immediate_abort` here instead rejected that legitimate
+    // combination before ever reaching the build.
+    ensure!(
+        !ambient_immediate_abort_needs_build_std(
+            inv.build_std,
+            env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref(),
+            env::var("RUSTFLAGS").ok().as_deref(),
+        ),
+        "the environment's Rust flags already select `-Cpanic=immediate-abort`, but neither \
+         `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
+         report says it means if the standard library is rebuilt with it too; pass \
+         `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
+         strategy yourself)"
+    );
+
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let host = host_triple()?;
     // The fragment directory exists before Cargo first sees this custom
@@ -410,7 +650,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         command.arg("-Zbuild-std");
     }
     command.args(&inv.cargo_args[split..]);
-    add_required_rustflags(&mut command);
+    add_required_rustflags(&mut command, inv.immediate_abort);
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
     command.env("NO_ALLOC_ROOTS", inv.roots.join(","));
     if inv.warn_only {
@@ -431,7 +671,22 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     }
 
     let cargo_status = cargo_status(command)?;
-    let report = aggregate(&fragment_dir, &inv.roots)?;
+    let (mut report, any_immediate_abort) = aggregate(&fragment_dir, &inv.roots)?;
+    // The pre-flight guard reads the environment, and the strategy can also
+    // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
+    // plus a profile), `config.toml`, or `--profile`. This one asks the
+    // build itself: the driver recorded the strategy rustc actually used, so
+    // a mixed configuration is caught however it was selected.
+    //
+    // Recorded into `selection_errors` before the report is written, not
+    // just raised as a hard error afterward: `Report::is_success()` would
+    // otherwise say `true` for a persisted `report.json` whose roots all
+    // passed, even though those verdicts were produced against a sysroot
+    // that was never rebuilt to match. A tool reading the file directly
+    // (rather than this process's own exit code) needs the taint to be
+    // in the artifact, not only on stderr.
+    let mixed_sysroot = mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort);
+    taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
     report
         .write_to_file(&target_dir.join("report.json"))
         .context("failed to write final report.json")?;
@@ -455,6 +710,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     if report.roots.is_empty() {
         eprintln!("{ZERO_ROOTS_WARNING}");
     }
+    // The report is written first (above), so the evidence survives this
+    // failure regardless of `--warn-only` — a mixed sysroot invalidates the
+    // very mechanism `--warn-only` relies on to interpret results, so unlike
+    // an ordinary finding it is never downgraded to a warning.
+    ensure!(
+        !mixed_sysroot,
+        "this build compiled with `-Cpanic=immediate-abort` against the precompiled standard \
+         library, which carries its own panic runtime — so the report's verdicts would claim \
+         panic paths that lower to `abort` when std's do not. Pass `--immediate-abort`, which \
+         applies the strategy to both halves, or `--build-std` if you are setting the \
+         strategy yourself (see docs/iterators.md)"
+    );
     if !cargo_status.success() {
         bail!("Cargo exited with {cargo_status}");
     }
@@ -466,7 +733,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Serializes the tests that write a fake `rustc` and then execute it.
+    ///
+    /// Writing an executable and running it is not thread-safe against a
+    /// *sibling* doing the same: the other test's `Command::spawn` inherits
+    /// the still-open write fd, and the exec then fails with `ETXTBSY`
+    /// ("Text file busy"). It reproduced about half the time here, as
+    /// whichever test lost the race failing with a spawn error instead of
+    /// the verdict it asserts on.
+    static FAKE_RUSTC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use super::*;
+    use no_alloc_report::RootVerdict;
     use std::os::unix::fs::PermissionsExt;
 
     // Every pre-existing test wants an `Invocation`; only the new
@@ -560,6 +838,378 @@ mod tests {
     }
 
     #[test]
+    fn ambient_immediate_abort_is_recognized_in_either_flag_variable() {
+        // Encoded takes precedence over plain, as in Cargo.
+        assert!(declares_immediate_abort(
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        assert!(declares_immediate_abort(
+            Some("--cfg=x\u{1f}-Cpanic=immediate-abort"),
+            None
+        ));
+        assert!(declares_immediate_abort(
+            None,
+            Some("-Zunstable-options -Cpanic=immediate-abort")
+        ));
+        assert!(!declares_immediate_abort(
+            Some("--cfg=x"),
+            Some("-Cpanic=immediate-abort")
+        ));
+        // Neighbouring strategies are not this one.
+        assert!(!declares_immediate_abort(None, Some("-Cpanic=abort")));
+        assert!(!declares_immediate_abort(None, Some("-Cpanic=unwind")));
+        assert!(!declares_immediate_abort(None, None));
+    }
+
+    /// `-C panic=val` is a documented spelling, and it reaches rustc the
+    /// same way the joined one does — as two adjacent arguments in either
+    /// variable, or as one encoded entry containing the space. Matching only
+    /// `-Cpanic=…` let every split form through.
+    #[test]
+    fn ambient_immediate_abort_is_recognized_when_the_flag_is_split() {
+        for plain in [
+            "-Zunstable-options -C panic=immediate-abort",
+            "-C panic=immediate-abort",
+            "--codegen panic=immediate-abort",
+            "--codegen=panic=immediate-abort",
+        ] {
+            assert!(declares_immediate_abort(None, Some(plain)), "{plain}");
+        }
+        for encoded in [
+            "-Zunstable-options\u{1f}-C\u{1f}panic=immediate-abort",
+            "-C panic=immediate-abort",
+            "--codegen\u{1f}panic=immediate-abort",
+        ] {
+            assert!(declares_immediate_abort(Some(encoded), None), "{encoded}");
+        }
+        // A dangling `-C`, or one whose value is a different strategy, is not
+        // a match — including when the next token merely looks similar.
+        for plain in [
+            "-C",
+            "-C panic=abort",
+            "-C opt-level=3 panic=immediate-abort-ish",
+            "--codegen debuginfo=2",
+        ] {
+            assert!(!declares_immediate_abort(None, Some(plain)), "{plain}");
+        }
+    }
+
+    /// `-Cpanic` is last-wins in rustc, so "the value appears somewhere" is
+    /// the wrong question — only the last setting is in effect. A stream
+    /// ending in `unwind` must not be reported as selecting immediate-abort
+    /// just because it appears earlier, and vice versa.
+    #[test]
+    fn declares_immediate_abort_honors_the_last_setting_not_any_setting() {
+        // Immediate-abort mentioned first, overridden by unwind: not in effect.
+        assert!(!declares_immediate_abort(
+            Some("-Cpanic=immediate-abort\u{1f}-Cpanic=unwind"),
+            None
+        ));
+        assert!(!declares_immediate_abort(
+            None,
+            Some("-Zunstable-options -Cpanic=immediate-abort -Cpanic=unwind")
+        ));
+        // The reverse order: unwind first, immediate-abort wins.
+        assert!(declares_immediate_abort(
+            Some("-Cpanic=unwind\u{1f}-Cpanic=immediate-abort"),
+            None
+        ));
+        // Mixed joined/split spellings, still last-wins.
+        assert!(!declares_immediate_abort(
+            None,
+            Some("-C panic=immediate-abort -Cpanic=abort")
+        ));
+    }
+
+    #[test]
+    fn immediate_abort_implies_build_std() -> Result<()> {
+        let inv = parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"])?;
+        assert!(inv.immediate_abort);
+        // Rebuilding the sysroot is not optional here: the precompiled one
+        // was built with a different panic strategy, and mixing them is
+        // exactly what this flag exists to avoid.
+        assert!(inv.build_std);
+        // --build-std on its own must not turn the panic strategy on.
+        let inv = parse(&["cargo-no-alloc", "--build-std", "--", "build"])?;
+        assert!(inv.build_std);
+        assert!(!inv.immediate_abort);
+        Ok(())
+    }
+
+    #[test]
+    fn immediate_abort_rejects_test_mode() {
+        let error = parse(&["cargo-no-alloc", "--immediate-abort", "--", "test"])
+            .expect_err("--immediate-abort -- test cannot build");
+        // The point of rejecting at parse time is the message: rustc's own
+        // failure arrives after a full sysroot rebuild and names an
+        // unrelated-looking flag.
+        assert!(error.to_string().contains("-- build"), "{error}");
+        // Neither half is a problem on its own.
+        assert!(parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"]).is_ok());
+        assert!(parse(&["cargo-no-alloc", "--", "test"]).is_ok());
+    }
+
+    #[test]
+    fn immediate_abort_flag_is_appended_even_when_an_equal_flag_is_inherited() {
+        // `-Cpanic` is last-wins, so "already present somewhere" is not the
+        // same as "in effect": an inherited pair ending in `-Cpanic=unwind`
+        // must not stop the checker's own copy from being appended last.
+        let flags = |encoded: &str| {
+            // SAFETY: see `orchestration_runs_with_fake_cargo_and_rustc` —
+            // env mutation in this binary is serialized by `FAKE_RUSTC`.
+            let _guard = FAKE_RUSTC
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = std::env::var_os("CARGO_ENCODED_RUSTFLAGS");
+            unsafe { std::env::set_var("CARGO_ENCODED_RUSTFLAGS", encoded) };
+            let mut command = Command::new("true");
+            add_required_rustflags(&mut command, true);
+            let value = command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_ENCODED_RUSTFLAGS")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            unsafe {
+                match previous {
+                    Some(previous) => std::env::set_var("CARGO_ENCODED_RUSTFLAGS", previous),
+                    None => std::env::remove_var("CARGO_ENCODED_RUSTFLAGS"),
+                }
+            }
+            value
+        };
+        let outvoted = flags("-Cpanic=immediate-abort\u{1f}-Cpanic=unwind");
+        let last = outvoted.split('\u{1f}').next_back().unwrap_or_default();
+        assert_eq!(last, "-Cpanic=immediate-abort", "in `{outvoted}`");
+    }
+
+    #[test]
+    fn aggregate_detects_immediate_abort_even_when_fragments_disagree() -> Result<()> {
+        // The P1 scenario: a target-specific config selects immediate-abort
+        // for the checked crate, while a wrapped host unit (a build script
+        // with a checked root of its own) compiles under something else.
+        // `Report::merge` correctly calls that disagreement `None` for
+        // `report.json`'s own sake — but `aggregate`'s second return value
+        // must still see the `ImmediateAbort` fragment, or the safety net in
+        // `run` never fires.
+        let directory = std::env::temp_dir().join(format!(
+            "cargo_no_alloc_aggregate_conflict_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory)?;
+        let root = |name: &str| RootVerdict {
+            root: name.to_owned(),
+            instance: name.to_owned(),
+            verdict: Verdict::Pass,
+        };
+        ReportFragment {
+            report: Report {
+                roots: vec![root("target::checked")],
+                panic_strategy: Some(PanicStrategy::ImmediateAbort),
+                ..Report::default()
+            },
+            matched_root_specs: vec![],
+        }
+        .write_to_file(&directory.join("target.json"))?;
+        ReportFragment {
+            report: Report {
+                roots: vec![root("build_script::checked")],
+                panic_strategy: Some(PanicStrategy::Unwind),
+                ..Report::default()
+            },
+            matched_root_specs: vec![],
+        }
+        .write_to_file(&directory.join("host.json"))?;
+
+        let (report, any_immediate_abort) = aggregate(&directory, &[])?;
+        // The report itself is silent about the disagreement, as designed...
+        assert_eq!(report.panic_strategy, None);
+        // ...but the safety-net signal still catches the mix.
+        assert!(any_immediate_abort);
+        assert!(mixed_sysroot_panic_strategy(false, any_immediate_abort));
+
+        std::fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[test]
+    fn taint_report_for_mixed_sysroot_flips_is_success() {
+        // The scenario this exists for: a trivial root that would pass
+        // under any panic strategy, so nothing about the traversal itself
+        // objects — but the sysroot claim is untrustworthy, and a reader of
+        // `report.json` alone (not this process's exit code) needs that to
+        // show up in the file.
+        let passing = Report {
+            roots: vec![RootVerdict {
+                root: "a".into(),
+                instance: "a".into(),
+                verdict: Verdict::Pass,
+            }],
+            panic_strategy: Some(PanicStrategy::ImmediateAbort),
+            ..Report::default()
+        };
+        assert!(passing.is_success());
+
+        let mut tainted = passing.clone();
+        taint_report_for_mixed_sysroot(&mut tainted, true);
+        assert!(!tainted.is_success());
+        assert_eq!(tainted.selection_errors.len(), 1);
+
+        // Not tainted when the sysroot isn't mixed: a coherent report is
+        // left exactly as `aggregate` produced it.
+        let mut untouched = passing.clone();
+        taint_report_for_mixed_sysroot(&mut untouched, false);
+        assert_eq!(untouched, passing);
+    }
+
+    #[test]
+    fn ambient_guard_accepts_build_std_without_the_immediate_abort_flag() {
+        // The exact case this round found: `--build-std` alone, no
+        // `--immediate-abort`, ambient flags already selecting the
+        // strategy — coherent, and must not be pre-flight rejected.
+        assert!(!ambient_immediate_abort_needs_build_std(
+            true,
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        // Neither flag: still a real mix, still rejected.
+        assert!(ambient_immediate_abort_needs_build_std(
+            false,
+            Some("-Cpanic=immediate-abort"),
+            None
+        ));
+        // No ambient strategy at all: nothing to reject regardless of
+        // `--build-std`.
+        assert!(!ambient_immediate_abort_needs_build_std(false, None, None));
+        assert!(!ambient_immediate_abort_needs_build_std(true, None, None));
+    }
+
+    #[test]
+    fn mixed_sysroot_is_flagged_only_without_build_std() {
+        // The dangerous case: crate compiled immediate-abort, sysroot left
+        // precompiled (manifest/config selected the strategy, `--build-std`
+        // was not passed).
+        assert!(mixed_sysroot_panic_strategy(false, true));
+        // `--build-std` rebuilds the sysroot under the same flags, so the
+        // same observation is coherent once it is set.
+        assert!(!mixed_sysroot_panic_strategy(true, true));
+        // Nothing observed has nothing to be mixed with.
+        assert!(!mixed_sysroot_panic_strategy(false, false));
+    }
+
+    #[test]
+    fn immediate_abort_rejects_test_harness_target_selection() -> Result<()> {
+        // `build --tests` reaches the same rustc failure as `-- test`, just
+        // through target selection, and just as far into a sysroot rebuild.
+        for selection in [vec!["--tests"], vec!["--all-targets"]] {
+            let mut args = vec!["cargo-no-alloc", "--immediate-abort", "--", "build"];
+            args.extend(selection.iter().copied());
+            let error = parse(&args).expect_err(&format!("{selection:?} must be rejected"));
+            assert!(error.to_string().contains("test-harness"), "{error}");
+            // Only `--immediate-abort` has the problem; plain runs still build them.
+            let mut plain = vec!["cargo-no-alloc", "--", "build"];
+            plain.extend(selection.iter().copied());
+            assert!(parse(&plain).is_ok(), "{selection:?} without the flag");
+        }
+        // Selections that name one target are *not* rejected: it may set
+        // `harness = false` and build fine, and this wrapper does not read
+        // per-target metadata to tell. The observed-strategy check after the
+        // build is what protects the report either way.
+        for selection in [
+            vec!["--bench", "throughput"],
+            vec!["--benches"],
+            vec!["--test", "ui"],
+        ] {
+            let mut args = vec!["cargo-no-alloc", "--immediate-abort", "--", "build"];
+            args.extend(selection.iter().copied());
+            assert!(parse(&args).is_ok(), "{selection:?} must be allowed");
+        }
+        // Target selections that build no harness stay accepted.
+        assert!(parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--lib"
+        ])
+        .is_ok());
+        assert!(parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--examples"
+        ])
+        .is_ok());
+        // Arguments after the test-runner separator are not target selection.
+        parse(&[
+            "cargo-no-alloc",
+            "--immediate-abort",
+            "--",
+            "build",
+            "--",
+            "--tests",
+        ])?;
+        Ok(())
+    }
+
+    #[test]
+    fn immediate_abort_rustflags_are_added_only_when_asked_for() {
+        // `add_required_rustflags` reads the ambient RUSTFLAGS/
+        // CARGO_ENCODED_RUSTFLAGS directly, so this needs the same isolation
+        // `immediate_abort_flag_is_appended_even_when_an_equal_flag_is_inherited`
+        // does: without it, either that test's transient mutation or a
+        // developer's own shell exporting `-Cpanic=immediate-abort` could
+        // leak in and fail the `without` assertions spuriously.
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let saved = [
+            ("RUSTFLAGS", std::env::var_os("RUSTFLAGS")),
+            (
+                "CARGO_ENCODED_RUSTFLAGS",
+                std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
+            ),
+        ];
+        // SAFETY: guarded by `FAKE_RUSTC`, restored before returning.
+        unsafe {
+            std::env::remove_var("RUSTFLAGS");
+            std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+        }
+        let flags = |immediate_abort| {
+            let mut command = Command::new("true");
+            add_required_rustflags(&mut command, immediate_abort);
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "RUSTFLAGS" || *name == "CARGO_ENCODED_RUSTFLAGS")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let without = flags(false);
+        let with = flags(true);
+        // SAFETY: same guard as above.
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        for flag in IMMEDIATE_ABORT_RUSTFLAGS {
+            assert!(!without.contains(flag), "unasked-for `{flag}`");
+            assert!(with.contains(flag), "missing `{flag}`");
+        }
+        for flag in REQUIRED_RUSTFLAGS {
+            assert!(without.contains(flag), "missing `{flag}`");
+            assert!(with.contains(flag), "missing `{flag}`");
+        }
+    }
+
+    #[test]
     fn rejects_malformed_checker_arguments() {
         assert!(parse(&["cargo-no-alloc", "--root"]).is_err());
         assert!(parse(&["cargo-no-alloc", "--root="]).is_err());
@@ -628,6 +1278,7 @@ mod tests {
         for flag in [
             "--all-crates",
             "--build-std",
+            "--immediate-abort",
             "--warn-only",
             "--root",
             "--help",
@@ -657,6 +1308,9 @@ mod tests {
 
     #[test]
     fn verify_pinned_toolchain_accepts_the_pinned_version() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_toolchain_ok_{}_{}",
             std::process::id(),
@@ -679,6 +1333,9 @@ mod tests {
 
     #[test]
     fn verify_pinned_toolchain_rejects_a_mismatched_version() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_toolchain_bad_{}_{}",
             std::process::id(),
@@ -716,12 +1373,13 @@ mod tests {
         }
         .write_to_file(&directory.join("fragment.json"))?;
 
-        let report = aggregate(
+        let (report, any_immediate_abort) = aggregate(
             &directory,
             &["matched::root".into(), "missing::root".into()],
         )?;
         assert_eq!(report.selection_errors.len(), 1);
         assert!(report.selection_errors[0].contains("missing::root"));
+        assert!(!any_immediate_abort);
         std::fs::remove_dir_all(directory)?;
         Ok(())
     }
@@ -733,13 +1391,20 @@ mod tests {
             std::process::id(),
             line!()
         ));
-        let report = aggregate(&directory, &[])?;
+        let (report, any_immediate_abort) = aggregate(&directory, &[])?;
         assert_eq!(report, Report::default());
+        assert!(!any_immediate_abort);
         Ok(())
     }
 
     #[test]
     fn orchestration_runs_with_fake_cargo_and_rustc() -> Result<()> {
+        // Also writes executables and runs them, so it shares the lock (see
+        // `FAKE_RUSTC`) as well as being the only test that mutates the
+        // process environment.
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "cargo_no_alloc_orchestration_{}_{}",
             std::process::id(),

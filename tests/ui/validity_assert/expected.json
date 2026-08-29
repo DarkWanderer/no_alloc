@@ -1,0 +1,30 @@
+{
+  "roots": [
+    {
+      "root": "validity_assert::not_zeroable",
+      "instance": "not_zeroable",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "not_zeroable",
+            "instance": "not_zeroable",
+            "span": null
+          },
+          {
+            "def_path": "std::mem::zeroed",
+            "instance": "std::mem::zeroed::<&u8>",
+            "span": null
+          },
+          {
+            "def_path": "std::intrinsics::assert_zero_valid",
+            "instance": "std::intrinsics::assert_zero_valid::<&u8> - intrinsic",
+            "span": null
+          }
+        ],
+        "reason": "`assert_zero_valid::<&u8>` does not hold, so this call compiles to a panic"
+      }
+    }
+  ],
+  "panic_strategy": "abort"
+}

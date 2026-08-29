@@ -1,0 +1,25 @@
+{
+  "roots": [
+    {
+      "root": "intrinsic_reject::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::intrinsics::catch_unwind",
+            "instance": "std::intrinsics::catch_unwind::<u8> - intrinsic",
+            "span": null
+          }
+        ],
+        "reason": "intrinsic `catch_unwind` is not in the non-allocating intrinsic table"
+      }
+    }
+  ],
+  "panic_strategy": "abort"
+}

@@ -24,13 +24,36 @@
 //! because the DFS walks every basic block in the body regardless of
 //! whether the branch leading to it is live (see ADR 0003 and the
 //! `dead_branch_dyn` fixture).
+//!
+//! Two things that look like "no body, therefore reject" are not. An
+//! intrinsic is a resolved callee whose body is the code the backend emits
+//! for it, so it is classified against the non-allocating intrinsic table
+//! (ADR 0005). A compiler-generated shim has a body that `instance_mir`
+//! builds on demand, even though `is_mir_available` says no about the
+//! `DefId` it stands for — so what has a walkable body is decided by
+//! `InstanceKind`, and call edges resolve from the callee operand's *type*
+//! rather than from whether it is a MIR constant (ADR 0007).
 
 use crate::leaf::allocates;
-use no_alloc_report::{Frame, Verdict};
+use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
 use rustc_middle::mir::TerminatorKind;
+use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
+
+/// The panic strategy this compilation is running under, converted at the
+/// rustc boundary for the report. What the traversal does with panic paths
+/// depends on it (`Assert` above, and whether the panic machinery is even
+/// reachable as MIR), so a report that carries a verdict should carry this
+/// alongside it — see ADR 0006.
+pub fn panic_strategy(tcx: TyCtxt<'_>) -> PanicStrategy {
+    match tcx.sess.panic_strategy() {
+        rustc_target::spec::PanicStrategy::Unwind => PanicStrategy::Unwind,
+        rustc_target::spec::PanicStrategy::Abort => PanicStrategy::Abort,
+        rustc_target::spec::PanicStrategy::ImmediateAbort => PanicStrategy::ImmediateAbort,
+    }
+}
 
 /// A checked root instance: the stable, JSON-able `Verdict` plus the raw
 /// `Span`s backing its chain (`Verdict::Frame::span` is already a rendered
@@ -114,16 +137,56 @@ fn visit<'tcx>(
         stack.pop();
         return Some(finding);
     }
-    // `Virtual`/`Intrinsic`/`LlvmIntrinsic` instances have no callable MIR
-    // of their own — calling `tcx.instance_mir` on `Intrinsic`/
-    // `LlvmIntrinsic` is an ICE, not a graceful "no body" signal, so this
-    // must be checked (cheaply, no query) before ever reaching that call.
-    if matches!(
-        instance.def,
-        InstanceKind::Virtual(..) | InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_)
-    ) || !tcx.is_mir_available(instance.def_id())
-        || tcx.is_foreign_item(instance.def_id())
-    {
+    // An intrinsic is fully resolved — the compiler *is* its body — so it is
+    // classified against the non-allocating intrinsic table rather than
+    // rejected for having no MIR (ADR 0005). Must come before the
+    // MIR-availability check below, which would otherwise reject it: calling
+    // `tcx.instance_mir` on an `Intrinsic`/`LlvmIntrinsic` is an ICE, not a
+    // graceful "no body" signal.
+    if let InstanceKind::Intrinsic(def_id) = instance.def {
+        let finding = match tcx.intrinsic(def_id) {
+            Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => None,
+            Some(intrinsic) if ValidityRequirement::from_intrinsic(intrinsic.name).is_some() => {
+                classify_validity_assertion(tcx, instance, intrinsic, stack)
+            }
+            Some(intrinsic) => Some(Finding::Rejected(
+                stack.clone(),
+                format!(
+                    "intrinsic `{}` is not in the non-allocating intrinsic table",
+                    intrinsic.name
+                ),
+            )),
+            // `InstanceKind::Intrinsic` without an `IntrinsicDef` shouldn't
+            // happen; reject rather than guess if it ever does.
+            None => Some(Finding::Rejected(
+                stack.clone(),
+                "unidentifiable intrinsic callee".to_string(),
+            )),
+        };
+        stack.pop();
+        return finding;
+    }
+    // What has a walkable body is a property of the `InstanceKind`, not of
+    // its `DefId`. `Intrinsic` (above), `LlvmIntrinsic`, and `Virtual` are
+    // the three kinds rustc documents as having no callable MIR of their
+    // own — and `tcx.instance_mir` on an `LlvmIntrinsic` ICEs rather than
+    // reporting that gracefully, so they are matched before any query runs.
+    // Every `Shim` kind is compiler-generated and *does* have a body, which
+    // `instance_mir` builds on demand; asking `is_mir_available` about a
+    // shim's `DefId` asks about the trait method it stands for, which has
+    // no body, and rejected callback-through-`&mut F` paths that are
+    // perfectly walkable (ADR 0007).
+    let has_body = match instance.def {
+        InstanceKind::Item(def_id) => tcx.is_mir_available(def_id) && !tcx.is_foreign_item(def_id),
+        // `Intrinsic` returned above; classifying it as bodiless here too
+        // means deleting that block degrades to the old reject-everything
+        // behaviour rather than to an ICE.
+        InstanceKind::Virtual(..) | InstanceKind::LlvmIntrinsic(_) | InstanceKind::Intrinsic(_) => {
+            false
+        }
+        InstanceKind::Shim(_) => true,
+    };
+    if !has_body {
         let finding = Finding::Rejected(
             stack.clone(),
             "no statically available MIR body for this callee".to_string(),
@@ -173,6 +236,44 @@ fn visit<'tcx>(
     pending_reject
 }
 
+/// `assert_inhabited`, `assert_zero_valid` and `assert_mem_uninitialized_valid`
+/// are the one family whose lowering depends on the instantiation, so they
+/// cannot be settled by the name table: codegen asks whether *this* type
+/// meets the requirement and emits either nothing at all or a call to the
+/// `panic_nounwind` lang item — a Rust function, synthesized after MIR, that
+/// this traversal would never see (`rustc_codegen_ssa`'s
+/// `codegen_panic_intrinsic`).
+///
+/// So this asks codegen's own question, with codegen's own query, and
+/// classifies per instantiation (ADR 0001, ADR 0005). A type that meets the
+/// requirement compiles to no code and is terminal; one that does not is
+/// rejected, because the panic it compiles to is exactly the edge the
+/// traversal cannot follow. A type whose layout cannot be computed is
+/// rejected too — no answer is not a "yes".
+fn classify_validity_assertion<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    intrinsic: ty::IntrinsicDef,
+    stack: &[(Instance<'tcx>, Span)],
+) -> Option<Finding<'tcx>> {
+    let requirement = ValidityRequirement::from_intrinsic(intrinsic.name)?;
+    let ty = instance.args.type_at(0);
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let holds = tcx
+        .check_validity_requirement((requirement, typing_env.as_query_input(ty)))
+        .unwrap_or(false);
+    if holds {
+        return None;
+    }
+    Some(Finding::Rejected(
+        stack.to_vec(),
+        format!(
+            "`{}::<{ty}>` does not hold, so this call compiles to a panic",
+            intrinsic.name
+        ),
+    ))
+}
+
 fn classify_terminator<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -184,30 +285,44 @@ fn classify_terminator<'tcx>(
     let mut edges = Vec::with_capacity(2);
     match kind {
         TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
-            match func.const_fn_def() {
-                Some((def_id, args)) => {
-                    let args = instance.instantiate_mir_and_normalize_erasing_regions(
-                        tcx,
-                        typing_env,
-                        ty::EarlyBinder::bind(tcx, args),
-                    );
-                    match Instance::try_resolve(tcx, typing_env, def_id, args) {
+            // Classified by the callee operand's *type*, not by whether it
+            // happens to be a MIR constant. A `FnDef` type names exactly one
+            // function and is zero-sized, so a callee that arrives as a move
+            // out of a local (which is how compiler-generated shims call the
+            // function they were built for) is as resolvable as one written
+            // as a literal path — `Operand::const_fn_def` sees only the
+            // latter, and rejecting the former cost the traversal every
+            // callback passed as a function item (ADR 0007).
+            let callee_ty = instance.instantiate_mir_and_normalize_erasing_regions(
+                tcx,
+                typing_env,
+                ty::EarlyBinder::bind(tcx, func.ty(body, tcx)),
+            );
+            match *callee_ty.kind() {
+                // `no_bound_vars` holds for anything reached from a
+                // monomorphized root; rejecting rather than unwrapping keeps
+                // a surprise here a finding instead of an ICE.
+                ty::FnDef(def_id, args) => match args.no_bound_vars() {
+                    Some(args) => match Instance::try_resolve(tcx, typing_env, def_id, args) {
                         Ok(Some(callee)) => edges.push(Edge::Resolved(callee, term_span)),
                         Ok(None) | Err(_) => edges.push(Edge::Unresolved(format!(
                             "callee `{}` could not be resolved to a concrete implementation",
                             tcx.def_path_str(def_id)
                         ))),
-                    }
-                }
-                // Covers fn pointers directly (non-`FnDef` callee type at
-                // the MIR level). `dyn` dispatch usually resolves via
-                // `try_resolve` to an `InstanceKind::Virtual` instance
-                // instead (caught above, not here) — both forms end up
-                // rejected, just through the two different guards.
-                // Rejection here is deliberately not path-sensitive: this
-                // fires even inside a branch that can provably never
-                // execute.
-                None => edges.push(Edge::Unresolved(
+                    },
+                    None => edges.push(Edge::Unresolved(format!(
+                        "callee `{}` is still generic over bound variables",
+                        tcx.def_path_str(def_id)
+                    ))),
+                },
+                // A genuine `fn` pointer: the type names a signature, not a
+                // body. `dyn` dispatch usually resolves via `try_resolve` to
+                // an `InstanceKind::Virtual` instance instead (caught in
+                // `visit`, not here) — both forms end up rejected, just
+                // through the two different guards. Rejection here is
+                // deliberately not path-sensitive: this fires even inside a
+                // branch that can provably never execute.
+                _ => edges.push(Edge::Unresolved(
                     "callee is a function pointer, not a statically resolvable body".to_string(),
                 )),
             }

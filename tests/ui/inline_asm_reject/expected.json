@@ -15,5 +15,6 @@
         "reason": "inline assembly can call or do anything opaquely"
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }

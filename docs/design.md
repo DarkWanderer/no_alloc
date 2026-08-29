@@ -18,7 +18,10 @@ Cargo external subcommands receive `no-alloc` as their first forwarded
 argument; the wrapper removes it before parsing checker flags. Only `build`
 and `test` are accepted because `check` does not populate the codegen mono
 graph. Forced `--target`, `--target-dir`, and `-Zbuild-std` options are placed
-before a test-runner `--` separator.
+before a test-runner `--` separator. `--immediate-abort` implies
+`-Zbuild-std` and adds `-Zunstable-options -Cpanic=immediate-abort` to the
+injected rustc flags, so the checked crate's own manifest needs no
+nightly-only keys.
 
 The wrapper uses the executable named by `CARGO`, preserves existing Rust
 flags, and refuses to overwrite existing rustc-wrapper configuration. An
@@ -48,10 +51,16 @@ Traversal is per monomorphized `Instance`, with cycle detection keyed by the
 instance rather than `DefId`. Allocator leaf detection precedes MIR-availability
 checks because allocator shims are declarations without ordinary MIR.
 
-Resolved calls, tail calls, and required drop glue are traversed. Function
-pointers, virtual dispatch, MIR-less foreign calls, and inline assembly reject.
-All edges in a body are considered; allocation violations take priority over
-rejections.
+Resolved calls, tail calls, compiler-generated shims, and required drop glue
+are traversed. A call edge resolves from the callee operand's type, so a
+function item passed as a callback is followed like any other callee
+([ADR 0007](../adr/0007-shim-and-fn-item-resolution.md)). Function pointers,
+virtual dispatch, MIR-less foreign calls, and inline assembly reject.
+Intrinsics are classified against the non-allocating intrinsic table in
+`no_alloc_report` rather than rejected wholesale
+([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)); an intrinsic not
+in the table rejects, named. All edges in a body are considered; allocation
+violations take priority over rejections.
 
 The terminator classification is documented in
 [ADR 0003](../adr/0003-reject-unresolved-edges.md). In particular, terminal
@@ -59,7 +68,11 @@ unwind control flow is not a call. Assertions pass only under a compiler-known
 non-unwinding panic strategy and otherwise reject. That "pass" is a scope
 exclusion, not a proof: the traversal's guarantee covers a root's
 non-panicking execution paths only (`README.md`, "Guarantee and
-limitations").
+limitations") — except under `--immediate-abort`
+([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
+std with `-Cpanic=immediate-abort` so panic paths are real, walkable edges
+ending in `intrinsics::abort` and need no exclusion.
+[`iterators.md`](iterators.md) is the measured consequence.
 
 ## Verification
 

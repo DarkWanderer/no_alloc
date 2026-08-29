@@ -1,0 +1,35 @@
+{
+  "roots": [
+    {
+      "root": "iterator_reject::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "<std::slice::Iter<'a, T> as std::iter::Iterator>::next",
+            "instance": "<std::slice::Iter<'_, f32> as std::iter::Iterator>::next",
+            "span": null
+          },
+          {
+            "def_path": "core::num::<impl usize>::unchecked_sub::precondition_check",
+            "instance": "core::num::<impl usize>::unchecked_sub::precondition_check",
+            "span": null
+          },
+          {
+            "def_path": "core::panicking::panic_nounwind_fmt",
+            "instance": "core::panicking::panic_nounwind_fmt",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      }
+    }
+  ],
+  "panic_strategy": "abort"
+}

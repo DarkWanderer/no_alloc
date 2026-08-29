@@ -34,5 +34,6 @@
         ]
       }
     }
-  ]
+  ],
+  "panic_strategy": "unwind"
 }
