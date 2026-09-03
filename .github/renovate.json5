@@ -11,4 +11,10 @@
     enabled: true,
     schedule: [],
   },
+  packageRules: [
+    {
+      matchManagers: ['cargo'],
+      rangeStrategy: 'replace',
+    },
+  ],
 }
