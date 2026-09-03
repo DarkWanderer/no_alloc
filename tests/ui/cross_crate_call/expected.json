@@ -1,0 +1,50 @@
+{
+  "roots": [
+    {
+      "root": "call_app::root_allocates",
+      "instance": "root_allocates",
+      "verdict": {
+        "kind": "violation",
+        "chain": [
+          {
+            "def_path": "root_allocates",
+            "instance": "root_allocates",
+            "span": null
+          },
+          {
+            "def_path": "call_dep::allocates",
+            "instance": "call_dep::allocates",
+            "span": null
+          },
+          {
+            "def_path": "std::boxed::Box::<T>::new",
+            "instance": "std::boxed::Box::<usize>::new",
+            "span": null
+          },
+          {
+            "def_path": "std::boxed::box_new_uninit",
+            "instance": "std::boxed::box_new_uninit",
+            "span": null
+          },
+          {
+            "def_path": "std::alloc::Global::alloc_impl_runtime",
+            "instance": "std::alloc::Global::alloc_impl_runtime",
+            "span": null
+          },
+          {
+            "def_path": "alloc::alloc::__rust_alloc_zeroed",
+            "instance": "alloc::alloc::__rust_alloc_zeroed",
+            "span": null
+          }
+        ]
+      }
+    },
+    {
+      "root": "call_app::root_pure",
+      "instance": "root_pure",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

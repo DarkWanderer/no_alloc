@@ -1,0 +1,37 @@
+error: no_alloc: this function may reach the global allocator
+   --> src/lib.rs:11:1
+    |
+ 11 | pub fn dep_allocates() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `dep_allocates`
+   --> src/lib.rs:11:1
+    |
+ 11 | pub fn dep_allocates() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<usize>::new`
+   --> src/lib.rs:12:6
+    |
+ 12 |     *Box::new(1)
+    |      ^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `all_crates_dep` (lib) due to 1 previous error

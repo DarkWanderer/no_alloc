@@ -1,0 +1,28 @@
+{
+  "roots": [
+    {
+      "root": "realloc_leaf::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "violation",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::alloc::realloc",
+            "instance": "std::alloc::realloc",
+            "span": null
+          },
+          {
+            "def_path": "alloc::alloc::__rust_realloc",
+            "instance": "alloc::alloc::__rust_realloc",
+            "span": null
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+warning: no_alloc checked 0 root instances — nothing was analyzed. This usually means either no `#[no_alloc]` marker was reached while building, or the marker lives in a crate outside the workspace (pass --all-crates to instrument it).
