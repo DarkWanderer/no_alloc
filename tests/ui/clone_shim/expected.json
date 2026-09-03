@@ -1,0 +1,34 @@
+{
+  "roots": [
+    {
+      "root": "clone_shim::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "clone_it",
+            "instance": "clone_it::<(i32, std::string::String)>",
+            "span": null
+          },
+          {
+            "def_path": "std::clone::Clone::clone",
+            "instance": "<(i32, std::string::String) as std::clone::Clone>::clone - shim((i32, std::string::String))",
+            "span": null
+          },
+          {
+            "def_path": "<std::string::String as std::clone::Clone>::clone",
+            "instance": "<std::string::String as std::clone::Clone>::clone",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      }
+    }
+  ]
+}

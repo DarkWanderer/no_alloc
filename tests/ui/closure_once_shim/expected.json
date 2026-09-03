@@ -1,0 +1,11 @@
+{
+  "roots": [
+    {
+      "root": "closure_once_shim::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "pass"
+      }
+    }
+  ]
+}

@@ -36,9 +36,9 @@
 
 use crate::leaf::allocates;
 use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
-use rustc_middle::mir::TerminatorKind;
+use rustc_middle::mir::{Body, TerminatorKind};
 use rustc_middle::ty::layout::ValidityRequirement;
-use rustc_middle::ty::{self, Instance, InstanceKind, TyCtxt};
+use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
 
@@ -166,37 +166,16 @@ fn visit<'tcx>(
         stack.pop();
         return finding;
     }
-    // What has a walkable body is a property of the `InstanceKind`, not of
-    // its `DefId`. `Intrinsic` (above), `LlvmIntrinsic`, and `Virtual` are
-    // the three kinds rustc documents as having no callable MIR of their
-    // own — and `tcx.instance_mir` on an `LlvmIntrinsic` ICEs rather than
-    // reporting that gracefully, so they are matched before any query runs.
-    // Every `Shim` kind is compiler-generated and *does* have a body, which
-    // `instance_mir` builds on demand; asking `is_mir_available` about a
-    // shim's `DefId` asks about the trait method it stands for, which has
-    // no body, and rejected callback-through-`&mut F` paths that are
-    // perfectly walkable (ADR 0007).
-    let has_body = match instance.def {
-        InstanceKind::Item(def_id) => tcx.is_mir_available(def_id) && !tcx.is_foreign_item(def_id),
-        // `Intrinsic` returned above; classifying it as bodiless here too
-        // means deleting that block degrades to the old reject-everything
-        // behaviour rather than to an ICE.
-        InstanceKind::Virtual(..) | InstanceKind::LlvmIntrinsic(_) | InstanceKind::Intrinsic(_) => {
-            false
+    let body = match resolve_body(tcx, instance) {
+        Ok(body) => body,
+        Err(reason) => {
+            let finding = Finding::Rejected(stack.clone(), reason);
+            stack.pop();
+            return Some(finding);
         }
-        InstanceKind::Shim(_) => true,
     };
-    if !has_body {
-        let finding = Finding::Rejected(
-            stack.clone(),
-            "no statically available MIR body for this callee".to_string(),
-        );
-        stack.pop();
-        return Some(finding);
-    }
 
     let typing_env = ty::TypingEnv::fully_monomorphized();
-    let body = tcx.instance_mir(instance.def);
 
     let mut pending_reject: Option<Finding<'tcx>> = None;
 
@@ -272,6 +251,72 @@ fn classify_validity_assertion<'tcx>(
             intrinsic.name
         ),
     ))
+}
+
+const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
+
+/// Exhaustively classifies whether an instance has faithful MIR to traverse.
+/// This must be decided from `InstanceKind`, not from `instance.def_id()`:
+/// shims have synthesized MIR even when the item whose `DefId` they carry is
+/// bodiless. Future rustc variants intentionally fail this match at compile
+/// time until their lowering has been audited (ADR 0003).
+fn resolve_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<&'tcx Body<'tcx>, String> {
+    match instance.def {
+        InstanceKind::Item(def_id) => {
+            if tcx.is_foreign_item(def_id) || !tcx.is_mir_available(def_id) {
+                Err(NO_MIR_BODY.to_string())
+            } else {
+                Ok(tcx.instance_mir(instance.def))
+            }
+        }
+        // Rust intrinsics return before this function after classification
+        // against ADR 0005. Keep the fallback rejecting so refactoring that
+        // path cannot turn an intrinsic into an `instance_mir` ICE.
+        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => {
+            Err(NO_MIR_BODY.to_string())
+        }
+        InstanceKind::Virtual(..) => Err(NO_MIR_BODY.to_string()),
+        InstanceKind::Shim(shim) => resolve_shim_body(tcx, instance, shim),
+    }
+}
+
+/// Per-shim traverse/reject decision, checked against
+/// `rustc_mir_transform::shim::make_shim` for the pinned nightly. Although
+/// rustc can synthesize MIR for every shim, only bodies whose lowering has
+/// been audited are safe to treat as faithful call-graph evidence.
+fn resolve_shim_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    shim: ShimKind<'tcx>,
+) -> Result<&'tcx Body<'tcx>, String> {
+    match shim {
+        // Direct-call adapters whose synthesized bodies expose their real
+        // callees to the ordinary `Call` classification below.
+        ShimKind::VTable(_)
+        | ShimKind::Reify(..)
+        | ShimKind::FnPtr(..)
+        | ShimKind::ClosureOnce { .. }
+        | ShimKind::DropGlue(..)
+        | ShimKind::Clone(..)
+        | ShimKind::FnPtrAddr(..) => Ok(tcx.instance_mir(instance.def)),
+        // TLS access can lower to a runtime call that has no MIR callee.
+        ShimKind::ThreadLocal(_) => Err(
+            "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+                .to_string(),
+        ),
+        // These unstable synthesized bodies have not been audited.
+        ShimKind::ConstructCoroutineInClosure { .. } => {
+            Err("coroutine-closure construction shim is not yet audited by this tool".to_string())
+        }
+        ShimKind::FutureDropPoll(..)
+        | ShimKind::AsyncDropGlue(..)
+        | ShimKind::AsyncDropGlueCtor(..) => {
+            Err("async drop glue is not yet audited by this tool".to_string())
+        }
+    }
 }
 
 fn classify_terminator<'tcx>(

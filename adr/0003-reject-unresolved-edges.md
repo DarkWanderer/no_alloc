@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended 2026-08-23 and 2026-08-25.
+Accepted, amended 2026-08-23, 2026-08-25, and 2026-09-03.
 
 ## Decision
 
@@ -27,6 +27,38 @@ explicitly. The exhaustive classification is:
 | terminate-on-unwind action | Same as `UnwindTerminate`: out of scope, not a synthesized call edge |
 | pre-lowering coroutine/false-edge forms | Reject as unexpected at this analysis stage |
 
+Reaching a callee's body is a separate exhaustive decision. It is classified
+from the resolved `InstanceKind` and, for compiler-generated shims, every
+`ShimKind`; asking whether `instance.def_id()` has MIR answers the wrong
+question for a shim, whose MIR is synthesized on demand.
+
+| `InstanceKind` / `ShimKind` | Classification |
+|---|---|
+| `Item` | Traverse if MIR is available and the item is not foreign; otherwise reject |
+| `Intrinsic` | Classify against ADR 0005's audited intrinsic table; reject an unrecognized intrinsic |
+| `LlvmIntrinsic` | Reject — no callable MIR exists |
+| `Virtual` | Reject — the runtime-selected vtable callee is not statically known |
+| `Shim(VTable)`, `Shim(Reify)`, `Shim(FnPtr)`, `Shim(ClosureOnce)` | Traverse — the synthesized body exposes its direct or indirect call to the ordinary call-edge classifier |
+| `Shim(DropGlue)` | Traverse for concrete types; a `dyn` place is rejected by the `Drop` terminator before constructing its glue |
+| `Shim(Clone)` | Traverse — the synthesized body contains either a trivial copy or the real per-field clone calls |
+| `Shim(FnPtrAddr)` | Traverse — the synthesized body is a call-free pointer cast |
+| `Shim(ThreadLocal)` | Reject — TLS access can lower to a runtime call with no MIR callee |
+| `Shim(ConstructCoroutineInClosure)`, `Shim(FutureDropPoll)`, `Shim(AsyncDropGlue)`, `Shim(AsyncDropGlueCtor)` | Reject — the unstable synthesized bodies have not been audited |
+
+Every shim arm above was checked against
+`rustc_mir_transform::shim::make_shim` on the pinned nightly. Future
+`InstanceKind` or `ShimKind` variants fail the exhaustive match until they are
+classified explicitly.
+
+### Retrospective: the `dyn` drop-glue gap (F0, 2026-09)
+
+`Instance::resolve_drop_glue(tcx, dyn Trait)` produces a synthesized
+`DropGlue` body containing another `Drop` on the same `dyn` place. The old
+traversal revisited the same instance and treated the cycle as complete,
+while codegen actually calls the concrete destructor through the vtable's
+drop slot. The `Drop` classifier now rejects a `dyn` place before constructing
+that glue. The `drop_dyn_arena` fixture pins this behavior.
+
 The checker uses `Session::panic_strategy().unwinds()` as its sole signal for
 `Assert`, and that is true of both non-unwinding strategies. Under plain
 `panic=abort`, a failing assertion still calls `core::panicking::panic_fmt`
@@ -47,13 +79,14 @@ here at all.)
 
 ## Consequences
 
-Future `TerminatorKind` variants fail the exhaustive match until explicitly
-classified. False positives from opaque calls are accepted in preference to a
-false proof. Terminal unwind mechanics and `Assert` under a non-unwinding
-strategy are not proof of "no allocation on this path" — they are excluded
-from the guarantee's scope because they are codegen-time calls with no MIR
-terminator to follow, and `README.md` states that exclusion explicitly. A
-`--strict-panics` mode that resolves the panic lang items and traverses them
-as real edges would close this gap for plain `panic=abort`; it is not
-implemented. `--immediate-abort` (ADR 0006) closes it a different way, by
-removing the panic runtime so those edges have nothing left to hide.
+Future `TerminatorKind`, `InstanceKind`, and `ShimKind` variants fail their
+exhaustive matches until explicitly classified. False positives from opaque
+calls are accepted in preference to a false proof. Terminal unwind mechanics
+and `Assert` under a non-unwinding strategy are not proof of "no allocation on
+this path" — they are excluded from the guarantee's scope because they are
+codegen-time calls with no MIR terminator to follow, and `README.md` states
+that exclusion explicitly. A `--strict-panics` mode that resolves the panic
+lang items and traverses them as real edges would close this gap for plain
+`panic=abort`; it is not implemented. `--immediate-abort` (ADR 0006) closes
+it a different way, by removing the panic runtime so those edges have nothing
+left to hide.
