@@ -38,12 +38,18 @@ downstream crate where each concrete instantiation exists. Uncalled,
 non-generic local roots are seeded directly; uncalled generic definitions are
 reported as `NotInstantiated` unless another fragment contains an instance.
 
-Every rustc process atomically writes a uniquely named report fragment. The
-wrapper merges fragments deterministically, removes duplicates and superseded
-`NotInstantiated` entries, validates every requested root across the complete
-build, and atomically writes `target/no-alloc/report.json`. Concurrent compiler
-processes never share an output filename. Report write failures are operational
-errors even under `--warn-only`.
+Every rustc process atomically writes a uniquely named report fragment,
+including the `Environment` (panic strategy, opt-level, mir-opt-level,
+target triple, rustc version, `--all-crates`/`--build-std`) that crate's
+verdicts were proven under. The wrapper merges fragments deterministically,
+removes duplicates and superseded `NotInstantiated` entries, validates every
+requested root across the complete build, and atomically writes
+`target/no-alloc/report.json`. If checked fragments disagree on their
+`Environment`, their roots remain visible but the merged environment becomes
+unknown and the mismatch becomes a `selection_error`, since a report claiming
+to be one coherent build would otherwise misrepresent what was proven.
+Concurrent compiler processes never share an output filename.
+Report write failures are operational errors even under `--warn-only`.
 
 ## Traversal
 

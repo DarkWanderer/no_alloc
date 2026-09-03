@@ -11,11 +11,34 @@ extern crate rustc_middle;
 extern crate rustc_span;
 
 use no_alloc_analysis::roots::DiscoveredRoot;
-use no_alloc_report::{Report, ReportFragment, RootVerdict};
+use no_alloc_report::{Environment, Report, ReportFragment, RootVerdict};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use std::path::{Path, PathBuf};
+
+/// Reads an `NO_ALLOC_*` boolean env var set by `cargo-no-alloc` itself
+/// (`"1"`/`"0"`) — invocation-level flags like `--all-crates`/`--build-std`
+/// aren't visible on `Session`, so they cross the process boundary as env
+/// vars like everything else the driver needs from the wrapper.
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).as_deref() == Ok("1")
+}
+
+fn environment(tcx: TyCtxt<'_>) -> Environment {
+    let sess = &tcx.sess;
+    Environment {
+        panic_strategy: no_alloc_analysis::traversal::panic_strategy(tcx),
+        opt_level: format!("{:?}", sess.opts.optimize),
+        mir_opt_level: sess.mir_opt_level() as u32,
+        target_triple: sess.opts.target_triple.tuple().to_string(),
+        rustc_version: rustc_interface::util::rustc_version_str()
+            .unwrap_or("unknown")
+            .to_string(),
+        all_crates: env_flag("NO_ALLOC_ALL_CRATES"),
+        build_std: env_flag("NO_ALLOC_BUILD_STD"),
+    }
+}
 
 /// Flags the driver needs on every invocation. `cargo-no-alloc` normally
 /// supplies these via `CARGO_ENCODED_RUSTFLAGS`, but the driver re-adds any
@@ -50,6 +73,8 @@ impl Callbacks for NoAllocCallbacks {
             // and drop the field entirely.
             panic_strategy: None,
             selection_errors: discovery.selection_errors,
+            environment: None,
+            ..Report::default()
         };
         let mut any_hard_error = false;
         // Only a *checked instance* licenses a strategy claim. A
@@ -87,7 +112,9 @@ impl Callbacks for NoAllocCallbacks {
         }
 
         if checked_an_instance {
-            report.panic_strategy = Some(no_alloc_analysis::traversal::panic_strategy(tcx));
+            let panic_strategy = no_alloc_analysis::traversal::panic_strategy(tcx);
+            report.panic_strategy = Some(panic_strategy);
+            report.environment = Some(environment(tcx));
         }
 
         let fragment_dir = std::env::var_os("NO_ALLOC_FRAGMENT_DIR")

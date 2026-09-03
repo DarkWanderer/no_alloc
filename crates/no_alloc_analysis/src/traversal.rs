@@ -276,9 +276,7 @@ fn resolve_body<'tcx>(
         // Rust intrinsics return before this function after classification
         // against ADR 0005. Keep the fallback rejecting so refactoring that
         // path cannot turn an intrinsic into an `instance_mir` ICE.
-        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => {
-            Err(NO_MIR_BODY.to_string())
-        }
+        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => Err(NO_MIR_BODY.to_string()),
         InstanceKind::Virtual(..) => Err(NO_MIR_BODY.to_string()),
         InstanceKind::Shim(shim) => resolve_shim_body(tcx, instance, shim),
     }

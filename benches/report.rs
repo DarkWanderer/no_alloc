@@ -20,7 +20,7 @@ fn deep_report(depth: usize) -> Report {
             verdict: Verdict::Violation { chain },
         }],
         panic_strategy: Some(no_alloc_report::PanicStrategy::Abort),
-        selection_errors: vec![],
+        ..Report::default()
     }
 }
 

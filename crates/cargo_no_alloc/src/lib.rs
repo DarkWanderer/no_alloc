@@ -653,6 +653,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     add_required_rustflags(&mut command, inv.immediate_abort);
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
     command.env("NO_ALLOC_ROOTS", inv.roots.join(","));
+    // Read back by the driver into each fragment's `Environment` (F4): these
+    // are invocation-level flags, not something `Session` exposes, so they
+    // have to cross the process boundary as plain env vars like everything
+    // else the driver needs from `cargo-no-alloc` itself.
+    command.env(
+        "NO_ALLOC_ALL_CRATES",
+        if inv.all_crates { "1" } else { "0" },
+    );
+    command.env("NO_ALLOC_BUILD_STD", if inv.build_std { "1" } else { "0" });
     if inv.warn_only {
         command.env("NO_ALLOC_WARN_ONLY", "1");
     } else {
