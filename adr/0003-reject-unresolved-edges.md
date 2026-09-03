@@ -50,6 +50,23 @@ Every shim arm above was checked against
 `InstanceKind` or `ShimKind` variants fail the exhaustive match until they are
 classified explicitly.
 
+### Non-terminator MIR (F3, 2026-09)
+
+The traversal also audits statements. `Rvalue::ThreadLocalRef` is rejected:
+rustc documents it as a runtime operation that executes code, and on some TLS
+models it lowers to `__tls_get_addr` without a MIR callee the analysis can
+follow. Every other `Rvalue` is call-free data movement or computation.
+Non-diverging `Assume` and `CopyNonOverlapping` statement intrinsics are also
+call-free, and the remaining statement kinds are compiler metadata or
+storage/discriminant operations with no call edge. The same conservative TLS
+decision applies to `ShimKind::ThreadLocal`; `thread_local_reject` covers the
+same-crate statement form.
+
+Demonstrating an allocator call through dynamic TLS would require a `cdylib`
+loaded with `dlopen` and has not been done. The rejection does not rely on that
+platform-specific path: the unmodeled runtime operation is sufficient under
+the reject-don't-assume policy.
+
 ### Retrospective: the `dyn` drop-glue gap (F0, 2026-09)
 
 `Instance::resolve_drop_glue(tcx, dyn Trait)` produces a synthesized

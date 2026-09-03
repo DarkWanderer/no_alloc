@@ -1,0 +1,19 @@
+{
+  "roots": [
+    {
+      "root": "thread_local_reject::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          }
+        ],
+        "reason": "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+      }
+    }
+  ]
+}

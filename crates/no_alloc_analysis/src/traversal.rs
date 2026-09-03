@@ -180,15 +180,16 @@ fn visit<'tcx>(
     let mut pending_reject: Option<Finding<'tcx>> = None;
 
     for bb in body.basic_blocks.iter() {
+        let mut edges = classify_statements(&bb.statements);
         let terminator = bb.terminator();
-        let edges = classify_terminator(
+        edges.extend(classify_terminator(
             tcx,
             instance,
             typing_env,
             body,
             &terminator.kind,
             terminator.source_info.span,
-        );
+        ));
         for edge in edges {
             match edge {
                 Edge::None => {}
@@ -317,6 +318,47 @@ fn resolve_shim_body<'tcx>(
             Err("async drop glue is not yet audited by this tool".to_string())
         }
     }
+}
+
+/// Non-terminator MIR (`StatementKind`/`Rvalue`) audit (F3 in the soundness
+/// review): every variant of both is call-free by construction — pure data
+/// movement, casts, comparisons, or aggregate/discriminant computation, none
+/// of which can reach the allocator — with one documented exception.
+///
+/// `Rvalue::ThreadLocalRef` is the only place where a *statement* (not a
+/// terminator) can execute real code: rustc's own doc comment on it says so
+/// directly ("this is a runtime operation that actually executes code and
+/// is in this sense more like a function call"), because on some TLS models
+/// it lowers to a call to `__tls_get_addr`, which glibc can route through
+/// `malloc` on first access to a `dlopen`ed module. There is no MIR callee
+/// to follow — it is not a `Call`, so nothing here can name a resolvable
+/// `Instance` for it the way every other edge in this traversal does — so
+/// it is rejected outright rather than silently treated as a plain data
+/// read. This is the same conservative call made for `ShimKind::ThreadLocal`
+/// (`resolve_shim_body`, above): a cross-crate thread-local access goes
+/// through that shim, a same-crate one is this bare statement, and neither
+/// is modeled beyond "reject, don't assume".
+///
+/// `StatementKind::Intrinsic(NonDivergingIntrinsic::Assume | CopyNonOverlapping)`
+/// and every other `StatementKind` (`Assign` with a non-`ThreadLocalRef`
+/// `Rvalue`, `FakeRead`, `SetDiscriminant`, `StorageLive`/`StorageDead`,
+/// `PlaceMention`, `AscribeUserType`, `Coverage`, `ConstEvalCounter`, `Nop`,
+/// `BackwardIncompatibleDropHint`) were checked against their doc comments
+/// in `rustc_middle::mir::syntax` and confirmed call-free.
+fn classify_statements<'tcx>(statements: &[rustc_middle::mir::Statement<'tcx>]) -> Vec<Edge<'tcx>> {
+    statements
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            rustc_middle::mir::StatementKind::Assign(assign) => match assign.1 {
+                rustc_middle::mir::Rvalue::ThreadLocalRef(_) => Some(Edge::Unresolved(
+                    "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+                        .to_string(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 fn classify_terminator<'tcx>(
