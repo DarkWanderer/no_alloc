@@ -193,16 +193,26 @@ fn visit<'tcx>(
         for edge in edges {
             match edge {
                 Edge::None => {}
-                Edge::Resolved(callee, span) => match visit(tcx, callee, span, visited, stack) {
-                    Some(Finding::Violation(chain)) => {
-                        stack.pop();
-                        return Some(Finding::Violation(chain));
+                // A std-heavy call graph can nest deeply enough to blow the
+                // native stack (this is plain recursion, no depth limit of
+                // its own) — `ensure_sufficient_stack` is the same guard
+                // rustc's own recursive queries use, growing onto a fresh
+                // stack segment before that happens rather than SIGSEGVing
+                // the driver.
+                Edge::Resolved(callee, span) => {
+                    match rustc_data_structures::stack::ensure_sufficient_stack(|| {
+                        visit(tcx, callee, span, visited, stack)
+                    }) {
+                        Some(Finding::Violation(chain)) => {
+                            stack.pop();
+                            return Some(Finding::Violation(chain));
+                        }
+                        Some(finding @ Finding::Rejected(..)) => {
+                            pending_reject.get_or_insert(finding);
+                        }
+                        None => {}
                     }
-                    Some(finding @ Finding::Rejected(..)) => {
-                        pending_reject.get_or_insert(finding);
-                    }
-                    None => {}
-                },
+                }
                 Edge::Unresolved(reason) => {
                     if pending_reject.is_none() {
                         pending_reject = Some(Finding::Rejected(stack.clone(), reason));

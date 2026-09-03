@@ -22,6 +22,18 @@ These are documented scope exclusions, not bugs. Please don't file a report
 for one; open a normal issue if the documentation itself is unclear about
 where the scope ends.
 
+**Also not a vulnerability: symbol interposition.** The analysis assumes a
+function's MIR body is what actually runs at that call site. `#[no_mangle]`,
+weak symbols, `dlopen`, and `LD_PRELOAD` can all replace a function's
+implementation at link or load time without changing its MIR — most
+concretely for a `cdylib`/`dylib` with default-visibility exports, where an
+external linker or loader can substitute a different definition for any
+exported symbol the traversal resolved statically. Modeling this is out of
+scope; it is not a documented exclusion carved out of an otherwise-covered
+path (like the panic paths above) but an assumption the whole approach
+depends on, so a report built around symbol interposition won't be treated
+as a soundness bug in this traversal.
+
 **A real vulnerability:** the checker passing a root that reaches the
 allocator through a path the guarantee claims to cover — e.g. via a resolved
 call, tail call, or drop glue on a non-panicking path, with no unresolved
