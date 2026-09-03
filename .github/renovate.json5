@@ -1,0 +1,30 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:best-practices',
+    ':semanticCommits',
+    'schedule:weekly',
+    'helpers:pinGitHubActionDigestsToSemver',
+  ],
+  rebaseWhen: 'conflicted',
+  vulnerabilityAlerts: {
+    enabled: true,
+    schedule: [],
+  },
+  packageRules: [
+    {
+      matchManagers: ['cargo'],
+      rangeStrategy: 'replace',
+    },
+    {
+      // nightly-2026-08-01 is pinned deliberately: the rustc-internals
+      // crates (rustc_middle, rustc_interface, ...) have no stability
+      // guarantee across nightlies, and no_alloc_analysis's driver is
+      // verified against this exact version. See AGENTS.md. Still raise
+      // the PR so a bump is visible, but never let it merge unattended.
+      matchManagers: ['rust-toolchain'],
+      matchDepNames: ['rust'],
+      automerge: false,
+    },
+  ],
+}
