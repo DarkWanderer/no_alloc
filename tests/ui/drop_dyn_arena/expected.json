@@ -1,0 +1,29 @@
+{
+  "roots": [
+    {
+      "root": "drop_dyn_arena::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::drop_in_place",
+            "instance": "std::ptr::drop_in_place::<dyn Greet>",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<dyn Greet> - shim(Some(dyn Greet))",
+            "span": null
+          }
+        ],
+        "reason": "drop through a vtable: the concrete destructor is not statically known"
+      }
+    }
+  ]
+}

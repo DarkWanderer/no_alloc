@@ -334,7 +334,29 @@ fn classify_terminator<'tcx>(
                 typing_env,
                 ty::EarlyBinder::bind(tcx, ty),
             );
-            if ty.needs_drop(tcx, typing_env) {
+            if let ty::Dynamic(..) = ty.kind() {
+                // `Instance::resolve_drop_glue(tcx, dyn Trait)` resolves to
+                // `Shim(DropGlue(drop_in_place, Some(dyn Trait)))`, whose
+                // *underlying* def_id (`drop_in_place`) owns a real MIR
+                // body, so the `is_mir_available` guard below never fires
+                // for it. But the shim's actual body — synthesized by the
+                // drop elaborator (`elaborate_drop.rs`'s `Dynamic` arm) —
+                // is a residual `Drop` terminator on the same still-`dyn`
+                // place, which resolves to the *same* instance and gets
+                // swallowed by `visited` as a silent pass (F0 in the
+                // soundness review). Codegen never takes this path: it
+                // replaces the resolved glue with
+                // `InstanceKind::Virtual(drop_fn.def_id(), 0)` and calls
+                // the concrete destructor through the vtable's drop slot
+                // (`rustc_codegen_ssa/src/mir/block.rs`). That concrete
+                // `Drop::drop` is not statically known here, so reject —
+                // this also catches the shim's residual `Drop`, since it
+                // has the same `dyn` place type and takes this same arm.
+                edges.push(Edge::Unresolved(
+                    "drop through a vtable: the concrete destructor is not statically known"
+                        .to_string(),
+                ));
+            } else if ty.needs_drop(tcx, typing_env) {
                 edges.push(Edge::Resolved(
                     Instance::resolve_drop_glue(tcx, ty),
                     term_span,
