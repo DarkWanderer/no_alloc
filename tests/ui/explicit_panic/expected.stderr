@@ -1,0 +1,23 @@
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+    --> src/main.rs:14:1
+     |
+  14 | fn root(values: &[u32], index: usize) -> u32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: via `root`
+    --> src/main.rs:14:1
+     |
+  14 | fn root(values: &[u32], index: usize) -> u32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::option::Option::<&u32>::unwrap`
+    --> src/main.rs:15:6
+     |
+  15 |     *values.get(index).unwrap()
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::option::unwrap_failed`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/option.rs:1014:21
+     |
+1014 |             None => unwrap_failed(),
+     |                     ^^^^^^^^^^^^^^^
+
+error: could not compile `explicit_panic` (bin "explicit_panic") due to 1 previous error

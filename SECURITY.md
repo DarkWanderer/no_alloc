@@ -3,9 +3,14 @@
 `no_alloc` is a pre-1.0 static analysis tool with a deliberately narrow,
 documented soundness claim: for a marked root, resolved calls, tail calls,
 and required drop glue on its *non-panicking* execution paths cannot reach
-the global allocator. That scope excludes panic, unwind-resume, and
-unwind-terminate paths entirely — see README's "Guarantee and limitations"
-and [ADR 0003](adr/0003-reject-unresolved-edges.md).
+the global allocator. That scope exclusion is drawn by MIR terminator shape,
+not by "does this path panic": it excludes `Unreachable`, `UnwindResume`,
+and `UnwindTerminate` terminators, and an `Assert` terminator under a
+non-unwinding panic strategy — see README's "Guarantee and limitations" and
+[ADR 0003](adr/0003-reject-unresolved-edges.md). An *explicit* panic
+(`panic!()`, `.unwrap()`, `.expect()`, ...) is a `Call` terminator, not one
+of those — it is in scope, and rejects (fails the build) rather than being
+excluded, since its callee is foreign/bodiless.
 
 ## What counts as a vulnerability here
 

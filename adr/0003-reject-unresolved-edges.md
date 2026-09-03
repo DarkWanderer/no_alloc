@@ -66,9 +66,17 @@ and the `#[panic_handler]` — which, with `std`, formats and prints, i.e.
 allocates — before the process aborts; under `-Cpanic=immediate-abort` it
 compiles to a bare `abort()`. The checker allows both identically, which is
 deliberate: the process is aborting either way, so both are covered by the
-same scope exclusion (panic paths are out of the guarantee). `panic=unwind`
+same terminator-shaped scope exclusion. `panic=unwind`
 rejects the terminator outright instead of attempting to model the panic
 runtime.
+
+The exclusion is terminator-shaped, not panic-shaped. It covers only the
+terminators in the table above that have no MIR callee to follow. An explicit
+panic (`panic!()`, `.unwrap()`, `.expect()`, and similar code) lowers to an
+ordinary `Call` terminator and is in scope; a foreign or bodiless panic-runtime
+callee rejects like any other unresolved call. Thus indexing (`Assert`) can
+pass under `panic=abort` while `get(index).unwrap()` (`Call`) rejects under the
+same profile. The `explicit_panic` and `panic_abort` fixtures pin the boundary.
 
 (Amended 2026-08-25: this ADR previously described the immediate-abort case
 as a std *feature*, `-Zbuild-std-features=panic_immediate_abort`. On the

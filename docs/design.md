@@ -66,9 +66,10 @@ The terminator classification is documented in
 [ADR 0003](../adr/0003-reject-unresolved-edges.md). In particular, terminal
 unwind control flow is not a call. Assertions pass only under a compiler-known
 non-unwinding panic strategy and otherwise reject. That "pass" is a scope
-exclusion, not a proof: the traversal's guarantee covers a root's
-non-panicking execution paths only (`README.md`, "Guarantee and
-limitations") — except under `--immediate-abort`
+exclusion, not a proof, and it is drawn by terminator shape: an explicit
+`panic!()` or `.unwrap()` is an ordinary `Call` terminator that remains in
+scope and rejects if unresolved (`README.md`, "Guarantee and limitations").
+Under `--immediate-abort`
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
 std with `-Cpanic=immediate-abort` so panic paths are real, walkable edges
 ending in `intrinsics::abort` and need no exclusion.

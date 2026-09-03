@@ -103,19 +103,24 @@ first among several that may exist; this is correct for a reachability
 claim, but don't read the chain as "this is the line that allocates" without
 checking.
 
-**The guarantee covers only the non-panicking execution paths of a root.**
+**The panic exclusion is drawn by terminator shape, not by whether a path
+panics.**
 `Unreachable`, `UnwindResume`, and `UnwindTerminate` have no MIR callee to
 follow, so the traversal treats them as terminal control flow rather than
 calls — but each one lowers to a real call during codegen (into the panic
 runtime's `panic_fmt`, a foreign `_Unwind_Resume`, or a nounwind panic-handler
-call) that the traversal never walks. An `Assert` terminator is allowed only
-under a non-unwinding panic strategy (`panic=abort`), and that is *not*
+call) that the traversal never walks. An `Assert` terminator (the implicit
+checks inserted for array bounds, arithmetic overflow, and similar cases) is
+allowed only under a non-unwinding panic strategy (`panic=abort`), and that is *not*
 because the panic runtime is unreachable there: a failing assertion under
 plain `panic=abort` still calls `panic_fmt` and the `#[panic_handler]`
 (which, with `std`, formats and prints — i.e. allocates) before the process
 aborts. It is allowed because allocation reachable only through a panic, an
 unwind-terminate, or an unwind-resume path is out of scope for this
-guarantee, not because that allocation has been ruled out. Under
+terminator is out of scope for this guarantee, not because that allocation
+has been ruled out. An explicit `panic!()`, `.unwrap()`, or `.expect()` has a
+different MIR shape: it is an ordinary `Call` terminator and remains in scope,
+so an unresolved panic-runtime callee rejects even under `panic=abort`. Under
 `panic=unwind`, `Assert` is rejected outright instead, on the usual
 reject-don't-assume grounds — see [ADR 0003](adr/0003-reject-unresolved-edges.md)
 for the full terminator classification and rationale.

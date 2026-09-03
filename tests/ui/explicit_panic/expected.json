@@ -1,0 +1,29 @@
+{
+  "roots": [
+    {
+      "root": "explicit_panic::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::option::Option::<T>::unwrap",
+            "instance": "std::option::Option::<&u32>::unwrap",
+            "span": null
+          },
+          {
+            "def_path": "std::option::unwrap_failed",
+            "instance": "std::option::unwrap_failed",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      }
+    }
+  ]
+}
