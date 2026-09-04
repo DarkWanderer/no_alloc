@@ -102,11 +102,23 @@ pub fn discover<'tcx>(tcx: TyCtxt<'tcx>) -> Discovery<'tcx> {
         let def_id = local.to_def_id();
         let path = root_path(tcx, def_id);
         let selected = record_matches(tcx, def_id, &requested, &mut matched);
-        if selected && !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
-            selection_errors.push(format!("requested root `{path}` is not a function"));
+        let marked = selected || is_root(tcx, def_id);
+        // Checked for *either* source of "this is a root candidate", not
+        // just `--root`-selection: a hand-written `#[no_alloc_tool::root]`
+        // (the internal attribute `#[no_alloc_check::no_alloc]` expands to)
+        // placed directly on a non-function item used to reach
+        // `tcx.generics_of`/`Instance::mono` below unguarded — verified this
+        // silently misclassified a `static` as a passing root instance
+        // rather than reporting it (a `tcx.instance_mir` call against its
+        // CTFE body, not a real function); other `DefKind`s are plausibly an
+        // ICE surface instead. Either way, this is a case the macro itself
+        // already rejects when reached through it normally.
+        if marked && !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+            let source = if selected { "requested" } else { "marked" };
+            selection_errors.push(format!("{source} root `{path}` is not a function"));
             continue;
         }
-        if !(selected || is_root(tcx, def_id)) || instantiated_defs.contains(&def_id) {
+        if !marked || instantiated_defs.contains(&def_id) {
             continue;
         }
         if tcx.generics_of(def_id).requires_monomorphization(tcx) {

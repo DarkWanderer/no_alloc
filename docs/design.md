@@ -38,12 +38,19 @@ downstream crate where each concrete instantiation exists. Uncalled,
 non-generic local roots are seeded directly; uncalled generic definitions are
 reported as `NotInstantiated` unless another fragment contains an instance.
 
-Every rustc process atomically writes a uniquely named report fragment. The
-wrapper merges fragments deterministically, removes duplicates and superseded
-`NotInstantiated` entries, validates every requested root across the complete
-build, and atomically writes `target/no-alloc/report.json`. Concurrent compiler
-processes never share an output filename. Report write failures are operational
-errors even under `--warn-only`.
+Every rustc process atomically writes a uniquely named report fragment. Each
+checked root records the `Environment` (panic strategy, opt-level,
+mir-opt-level, overflow-checks, debug-assertions, target triple, rustc
+version, `--all-crates`/`--build-std`) its verdict was proven under;
+`NotInstantiated` markers have no verdict and no environment. This per-root association preserves legitimate differences
+between host and target artifacts in one Cargo build. A checked root from a
+legacy fragment with no recorded environment becomes a `selection_error`
+rather than being silently relabelled. The wrapper merges fragments
+deterministically, removes duplicates and superseded `NotInstantiated`
+entries, validates every requested root across the complete build, and
+atomically writes `target/no-alloc/report.json`. Concurrent compiler processes
+never share an output filename.
+Report write failures are operational errors even under `--warn-only`.
 
 ## Traversal
 
@@ -66,9 +73,10 @@ The terminator classification is documented in
 [ADR 0003](../adr/0003-reject-unresolved-edges.md). In particular, terminal
 unwind control flow is not a call. Assertions pass only under a compiler-known
 non-unwinding panic strategy and otherwise reject. That "pass" is a scope
-exclusion, not a proof: the traversal's guarantee covers a root's
-non-panicking execution paths only (`README.md`, "Guarantee and
-limitations") — except under `--immediate-abort`
+exclusion, not a proof, and it is drawn by terminator shape: an explicit
+`panic!()` or `.unwrap()` is an ordinary `Call` terminator that remains in
+scope and rejects if unresolved (`README.md`, "Guarantee and limitations").
+Under `--immediate-abort`
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
 std with `-Cpanic=immediate-abort` so panic paths are real, walkable edges
 ending in `intrinsics::abort` and need no exclusion.

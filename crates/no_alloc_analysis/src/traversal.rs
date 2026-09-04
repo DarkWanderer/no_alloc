@@ -36,9 +36,9 @@
 
 use crate::leaf::allocates;
 use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
-use rustc_middle::mir::TerminatorKind;
+use rustc_middle::mir::{Body, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::layout::ValidityRequirement;
-use rustc_middle::ty::{self, Instance, InstanceKind, TyCtxt};
+use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
 
@@ -166,63 +166,53 @@ fn visit<'tcx>(
         stack.pop();
         return finding;
     }
-    // What has a walkable body is a property of the `InstanceKind`, not of
-    // its `DefId`. `Intrinsic` (above), `LlvmIntrinsic`, and `Virtual` are
-    // the three kinds rustc documents as having no callable MIR of their
-    // own — and `tcx.instance_mir` on an `LlvmIntrinsic` ICEs rather than
-    // reporting that gracefully, so they are matched before any query runs.
-    // Every `Shim` kind is compiler-generated and *does* have a body, which
-    // `instance_mir` builds on demand; asking `is_mir_available` about a
-    // shim's `DefId` asks about the trait method it stands for, which has
-    // no body, and rejected callback-through-`&mut F` paths that are
-    // perfectly walkable (ADR 0007).
-    let has_body = match instance.def {
-        InstanceKind::Item(def_id) => tcx.is_mir_available(def_id) && !tcx.is_foreign_item(def_id),
-        // `Intrinsic` returned above; classifying it as bodiless here too
-        // means deleting that block degrades to the old reject-everything
-        // behaviour rather than to an ICE.
-        InstanceKind::Virtual(..) | InstanceKind::LlvmIntrinsic(_) | InstanceKind::Intrinsic(_) => {
-            false
+    let body = match resolve_body(tcx, instance) {
+        Ok(body) => body,
+        Err(reason) => {
+            let finding = Finding::Rejected(stack.clone(), reason);
+            stack.pop();
+            return Some(finding);
         }
-        InstanceKind::Shim(_) => true,
     };
-    if !has_body {
-        let finding = Finding::Rejected(
-            stack.clone(),
-            "no statically available MIR body for this callee".to_string(),
-        );
-        stack.pop();
-        return Some(finding);
-    }
 
     let typing_env = ty::TypingEnv::fully_monomorphized();
-    let body = tcx.instance_mir(instance.def);
 
     let mut pending_reject: Option<Finding<'tcx>> = None;
 
     for bb in body.basic_blocks.iter() {
+        let mut edges = classify_statements(&bb.statements);
         let terminator = bb.terminator();
-        let edges = classify_terminator(
+        edges.extend(classify_terminator(
             tcx,
             instance,
             typing_env,
             body,
             &terminator.kind,
             terminator.source_info.span,
-        );
+        ));
         for edge in edges {
             match edge {
                 Edge::None => {}
-                Edge::Resolved(callee, span) => match visit(tcx, callee, span, visited, stack) {
-                    Some(Finding::Violation(chain)) => {
-                        stack.pop();
-                        return Some(Finding::Violation(chain));
+                // A std-heavy call graph can nest deeply enough to blow the
+                // native stack (this is plain recursion, no depth limit of
+                // its own) — `ensure_sufficient_stack` is the same guard
+                // rustc's own recursive queries use, growing onto a fresh
+                // stack segment before that happens rather than SIGSEGVing
+                // the driver.
+                Edge::Resolved(callee, span) => {
+                    match rustc_data_structures::stack::ensure_sufficient_stack(|| {
+                        visit(tcx, callee, span, visited, stack)
+                    }) {
+                        Some(Finding::Violation(chain)) => {
+                            stack.pop();
+                            return Some(Finding::Violation(chain));
+                        }
+                        Some(finding @ Finding::Rejected(..)) => {
+                            pending_reject.get_or_insert(finding);
+                        }
+                        None => {}
                     }
-                    Some(finding @ Finding::Rejected(..)) => {
-                        pending_reject.get_or_insert(finding);
-                    }
-                    None => {}
-                },
+                }
                 Edge::Unresolved(reason) => {
                     if pending_reject.is_none() {
                         pending_reject = Some(Finding::Rejected(stack.clone(), reason));
@@ -272,6 +262,139 @@ fn classify_validity_assertion<'tcx>(
             intrinsic.name
         ),
     ))
+}
+
+const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
+
+/// Exhaustively classifies whether an instance has faithful MIR to traverse.
+/// This must be decided from `InstanceKind`, not from `instance.def_id()`:
+/// shims have synthesized MIR even when the item whose `DefId` they carry is
+/// bodiless. Future rustc variants intentionally fail this match at compile
+/// time until their lowering has been audited (ADR 0003).
+fn resolve_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<&'tcx Body<'tcx>, String> {
+    match instance.def {
+        InstanceKind::Item(def_id) => {
+            if tcx.is_foreign_item(def_id) || !tcx.is_mir_available(def_id) {
+                Err(NO_MIR_BODY.to_string())
+            } else {
+                Ok(tcx.instance_mir(instance.def))
+            }
+        }
+        // Rust intrinsics return before this function after classification
+        // against ADR 0005. Keep the fallback rejecting so refactoring that
+        // path cannot turn an intrinsic into an `instance_mir` ICE.
+        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => Err(NO_MIR_BODY.to_string()),
+        InstanceKind::Virtual(..) => Err(NO_MIR_BODY.to_string()),
+        InstanceKind::Shim(shim) => resolve_shim_body(tcx, instance, shim),
+    }
+}
+
+/// Per-shim traverse/reject decision, checked against
+/// `rustc_mir_transform::shim::make_shim` for the pinned nightly. Although
+/// rustc can synthesize MIR for every shim, only bodies whose lowering has
+/// been audited are safe to treat as faithful call-graph evidence.
+fn resolve_shim_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    shim: ShimKind<'tcx>,
+) -> Result<&'tcx Body<'tcx>, String> {
+    match shim {
+        // Direct-call adapters whose synthesized bodies expose their real
+        // callees to the ordinary `Call` classification below.
+        ShimKind::VTable(_)
+        | ShimKind::Reify(..)
+        | ShimKind::FnPtr(..)
+        | ShimKind::ClosureOnce { .. }
+        | ShimKind::DropGlue(..)
+        | ShimKind::Clone(..)
+        | ShimKind::FnPtrAddr(..) => Ok(tcx.instance_mir(instance.def)),
+        // TLS access can lower to a runtime call that has no MIR callee.
+        ShimKind::ThreadLocal(_) => Err(
+            "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+                .to_string(),
+        ),
+        // These unstable synthesized bodies have not been audited.
+        ShimKind::ConstructCoroutineInClosure { .. } => {
+            Err("coroutine-closure construction shim is not yet audited by this tool".to_string())
+        }
+        ShimKind::FutureDropPoll(..)
+        | ShimKind::AsyncDropGlue(..)
+        | ShimKind::AsyncDropGlueCtor(..) => {
+            Err("async drop glue is not yet audited by this tool".to_string())
+        }
+    }
+}
+
+/// Non-terminator MIR (`StatementKind`/`Rvalue`) audit (F3 in the soundness
+/// review): every variant of both is call-free by construction — pure data
+/// movement, casts, comparisons, or aggregate/discriminant computation, none
+/// of which can reach the allocator — with one documented exception.
+///
+/// `Rvalue::ThreadLocalRef` is the only place where a *statement* (not a
+/// terminator) can execute real code: rustc's own doc comment on it says so
+/// directly ("this is a runtime operation that actually executes code and
+/// is in this sense more like a function call"), because on some TLS models
+/// it lowers to a call to `__tls_get_addr`, which glibc can route through
+/// `malloc` on first access to a `dlopen`ed module. There is no MIR callee
+/// to follow — it is not a `Call`, so nothing here can name a resolvable
+/// `Instance` for it the way every other edge in this traversal does — so
+/// it is rejected outright rather than silently treated as a plain data
+/// read. This is the same conservative call made for `ShimKind::ThreadLocal`
+/// (`resolve_shim_body`, above): a cross-crate thread-local access goes
+/// through that shim, a same-crate one is this bare statement, and neither
+/// is modeled beyond "reject, don't assume".
+///
+/// `StatementKind::Intrinsic(NonDivergingIntrinsic::Assume | CopyNonOverlapping)`
+/// and every other `StatementKind` (`Assign` with a non-`ThreadLocalRef`
+/// `Rvalue`, `FakeRead`, `SetDiscriminant`, `StorageLive`/`StorageDead`,
+/// `PlaceMention`, `AscribeUserType`, `Coverage`, `ConstEvalCounter`, `Nop`,
+/// `BackwardIncompatibleDropHint`) were checked against their doc comments
+/// in `rustc_middle::mir::syntax` and confirmed call-free.
+///
+/// Both matches below name every variant instead of falling back to `_`, on
+/// purpose: a `_` arm would keep compiling — and silently return `None`, the
+/// "no edge" answer — the day the pinned nightly adds a new `StatementKind`
+/// or `Rvalue` variant that was never audited against this reasoning. Naming
+/// them all turns that into a compile error here instead, which is the only
+/// way to *force* the audit rather than hope someone remembers it.
+fn classify_statements<'tcx>(statements: &[rustc_middle::mir::Statement<'tcx>]) -> Vec<Edge<'tcx>> {
+    statements
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::Assign(assign) => match assign.1 {
+                Rvalue::ThreadLocalRef(_) => Some(Edge::Unresolved(
+                    "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+                        .to_string(),
+                )),
+                Rvalue::Use(..)
+                | Rvalue::Repeat(..)
+                | Rvalue::Ref(..)
+                | Rvalue::RawPtr(..)
+                | Rvalue::Cast(..)
+                | Rvalue::BinaryOp(..)
+                | Rvalue::UnaryOp(..)
+                | Rvalue::Discriminant(..)
+                | Rvalue::Aggregate(..)
+                | Rvalue::CopyForDeref(..)
+                | Rvalue::WrapUnsafeBinder(..)
+                | Rvalue::Reborrow(..) => None,
+            },
+            StatementKind::FakeRead(..)
+            | StatementKind::SetDiscriminant { .. }
+            | StatementKind::StorageLive(..)
+            | StatementKind::StorageDead(..)
+            | StatementKind::PlaceMention(..)
+            | StatementKind::AscribeUserType(..)
+            | StatementKind::Coverage(..)
+            | StatementKind::Intrinsic(..)
+            | StatementKind::ConstEvalCounter
+            | StatementKind::Nop
+            | StatementKind::BackwardIncompatibleDropHint { .. } => None,
+        })
+        .collect()
 }
 
 fn classify_terminator<'tcx>(
@@ -334,7 +457,29 @@ fn classify_terminator<'tcx>(
                 typing_env,
                 ty::EarlyBinder::bind(tcx, ty),
             );
-            if ty.needs_drop(tcx, typing_env) {
+            if let ty::Dynamic(..) = ty.kind() {
+                // `Instance::resolve_drop_glue(tcx, dyn Trait)` resolves to
+                // `Shim(DropGlue(drop_in_place, Some(dyn Trait)))`, whose
+                // *underlying* def_id (`drop_in_place`) owns a real MIR
+                // body, so the `is_mir_available` guard below never fires
+                // for it. But the shim's actual body — synthesized by the
+                // drop elaborator (`elaborate_drop.rs`'s `Dynamic` arm) —
+                // is a residual `Drop` terminator on the same still-`dyn`
+                // place, which resolves to the *same* instance and gets
+                // swallowed by `visited` as a silent pass (F0 in the
+                // soundness review). Codegen never takes this path: it
+                // replaces the resolved glue with
+                // `InstanceKind::Virtual(drop_fn.def_id(), 0)` and calls
+                // the concrete destructor through the vtable's drop slot
+                // (`rustc_codegen_ssa/src/mir/block.rs`). That concrete
+                // `Drop::drop` is not statically known here, so reject —
+                // this also catches the shim's residual `Drop`, since it
+                // has the same `dyn` place type and takes this same arm.
+                edges.push(Edge::Unresolved(
+                    "drop through a vtable: the concrete destructor is not statically known"
+                        .to_string(),
+                ));
+            } else if ty.needs_drop(tcx, typing_env) {
                 edges.push(Edge::Resolved(
                     Instance::resolve_drop_glue(tcx, ty),
                     term_span,

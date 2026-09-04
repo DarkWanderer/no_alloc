@@ -1,0 +1,13 @@
+error: no_alloc: this function has an unresolved call (thread-local access is not modeled (may call into the TLS runtime on some targets))
+  --> src/main.rs:19:1
+   |
+19 | fn root() -> i32 {
+   | ^^^^^^^^^^^^^^^^
+   |
+note: via `root`
+  --> src/main.rs:19:1
+   |
+19 | fn root() -> i32 {
+   | ^^^^^^^^^^^^^^^^
+
+error: could not compile `thread_local_reject` (bin "thread_local_reject") due to 1 previous error

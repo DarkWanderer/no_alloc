@@ -5,6 +5,17 @@
       "instance": "bits_root",
       "verdict": {
         "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "abort",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
       }
     },
     {
@@ -12,8 +23,20 @@
       "instance": "float_root",
       "verdict": {
         "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "abort",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
       }
     }
   ],
-  "panic_strategy": "abort"
+  "panic_strategy": "abort",
+  "schema_version": 2
 }

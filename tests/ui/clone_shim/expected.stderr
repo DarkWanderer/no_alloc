@@ -1,0 +1,28 @@
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+   --> src/main.rs:18:1
+    |
+ 18 | fn root(pair: &(i32, String)) -> (i32, String) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `root`
+   --> src/main.rs:18:1
+    |
+ 18 | fn root(pair: &(i32, String)) -> (i32, String) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `clone_it::<(i32, std::string::String)>`
+   --> src/main.rs:19:5
+    |
+ 19 |     clone_it(pair)
+    |     ^^^^^^^^^^^^^^
+note: via `<(i32, std::string::String) as std::clone::Clone>::clone - shim((i32, std::string::String))`
+   --> src/main.rs:14:5
+    |
+ 14 |     value.clone()
+    |     ^^^^^^^^^^^^^
+note: via `<std::string::String as std::clone::Clone>::clone`
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/clone.rs:236:5
+    |
+236 |     fn clone(&self) -> Self;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `clone_shim` (bin "clone_shim") due to 1 previous error

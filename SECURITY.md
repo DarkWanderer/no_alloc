@@ -3,9 +3,14 @@
 `no_alloc` is a pre-1.0 static analysis tool with a deliberately narrow,
 documented soundness claim: for a marked root, resolved calls, tail calls,
 and required drop glue on its *non-panicking* execution paths cannot reach
-the global allocator. That scope excludes panic, unwind-resume, and
-unwind-terminate paths entirely — see README's "Guarantee and limitations"
-and [ADR 0003](adr/0003-reject-unresolved-edges.md).
+the global allocator. That scope exclusion is drawn by MIR terminator shape,
+not by "does this path panic": it excludes `Unreachable`, `UnwindResume`,
+and `UnwindTerminate` terminators, and an `Assert` terminator under a
+non-unwinding panic strategy — see README's "Guarantee and limitations" and
+[ADR 0003](adr/0003-reject-unresolved-edges.md). An *explicit* panic
+(`panic!()`, `.unwrap()`, `.expect()`, ...) is a `Call` terminator, not one
+of those — it is in scope, and rejects (fails the build) rather than being
+excluded, since its callee is foreign/bodiless.
 
 ## What counts as a vulnerability here
 
@@ -16,6 +21,18 @@ terminator, or an `Assert` allowed under a non-unwinding panic strategy.
 These are documented scope exclusions, not bugs. Please don't file a report
 for one; open a normal issue if the documentation itself is unclear about
 where the scope ends.
+
+**Also not a vulnerability: symbol interposition.** The analysis assumes a
+function's MIR body is what actually runs at that call site. `#[no_mangle]`,
+weak symbols, `dlopen`, and `LD_PRELOAD` can all replace a function's
+implementation at link or load time without changing its MIR — most
+concretely for a `cdylib`/`dylib` with default-visibility exports, where an
+external linker or loader can substitute a different definition for any
+exported symbol the traversal resolved statically. Modeling this is out of
+scope; it is not a documented exclusion carved out of an otherwise-covered
+path (like the panic paths above) but an assumption the whole approach
+depends on, so a report built around symbol interposition won't be treated
+as a soundness bug in this traversal.
 
 **A real vulnerability:** the checker passing a root that reaches the
 allocator through a path the guarantee claims to cover — e.g. via a resolved

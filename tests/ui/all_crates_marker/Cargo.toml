@@ -1,0 +1,9 @@
+[workspace]
+
+[package]
+name = "all_crates_marker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+all_crates_dep = { path = "../all_crates_dep" }

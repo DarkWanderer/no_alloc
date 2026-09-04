@@ -1,0 +1,42 @@
+{
+  "roots": [
+    {
+      "root": "drop_dyn_arena::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::drop_in_place",
+            "instance": "std::ptr::drop_in_place::<dyn Greet>",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::drop_glue",
+            "instance": "std::ptr::drop_glue::<dyn Greet> - shim(Some(dyn Greet))",
+            "span": null
+          }
+        ],
+        "reason": "drop through a vtable: the concrete destructor is not statically known"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "unwind",
+  "schema_version": 2
+}

@@ -1,0 +1,12 @@
+{
+  "roots": [
+    {
+      "root": "uncalled_dep::uncalled_root",
+      "instance": "uncalled_dep::uncalled_root",
+      "verdict": {
+        "kind": "not_instantiated"
+      }
+    }
+  ],
+  "schema_version": 2
+}

@@ -1,0 +1,42 @@
+error: no_alloc: this function may reach the global allocator
+   --> app/src/main.rs:11:1
+    |
+ 11 | fn root_allocates() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `root_allocates`
+   --> app/src/main.rs:11:1
+    |
+ 11 | fn root_allocates() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `call_dep::allocates`
+   --> app/src/main.rs:12:5
+    |
+ 12 |     call_dep::allocates()
+    |     ^^^^^^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<usize>::new`
+   --> dep/src/lib.rs:2:6
+    |
+  2 |     *Box::new(1)
+    |      ^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `call_app` (bin "call_app") due to 1 previous error

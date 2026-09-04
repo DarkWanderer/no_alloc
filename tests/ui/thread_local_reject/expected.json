@@ -1,0 +1,32 @@
+{
+  "roots": [
+    {
+      "root": "thread_local_reject::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          }
+        ],
+        "reason": "thread-local access is not modeled (may call into the TLS runtime on some targets)"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "unwind",
+  "schema_version": 2
+}

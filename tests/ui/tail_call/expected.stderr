@@ -1,0 +1,57 @@
+warning: the feature `explicit_tail_calls` is incomplete and may not be safe to use and/or cause compiler crashes
+ --> src/main.rs:6:12
+  |
+6 | #![feature(explicit_tail_calls)]
+  |            ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: see issue #112788 <https://github.com/rust-lang/rust/issues/112788> for more information
+  = note: `#[warn(incomplete_features)]` on by default
+
+error: no_alloc: this function may reach the global allocator
+   --> src/main.rs:18:1
+    |
+ 18 | fn root() -> i32 {
+    | ^^^^^^^^^^^^^^^^
+    |
+note: via `root`
+   --> src/main.rs:18:1
+    |
+ 18 | fn root() -> i32 {
+    | ^^^^^^^^^^^^^^^^
+note: via `helper`
+   --> src/main.rs:19:5
+    |
+ 19 |     become helper()
+    |     ^^^^^^^^^^^^^^^
+note: via `leaf`
+   --> src/main.rs:14:5
+    |
+ 14 |     become leaf()
+    |     ^^^^^^^^^^^^^
+note: via `std::boxed::Box::<i32>::new`
+   --> src/main.rs:9:13
+    |
+  9 |     let b = Box::new(9);
+    |             ^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `tail_call` (bin "tail_call") generated 1 warning
+error: could not compile `tail_call` (bin "tail_call") due to 1 previous error; 1 warning emitted

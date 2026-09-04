@@ -165,9 +165,10 @@ target crate's own `--immediate-abort`-checked code, so a host root reaching
 one is not weaker than a target root reaching the same terminator under
 immediate-abort — it is the same, pre-existing, documented exclusion.
 
-So: a mixed host/target `panic_strategy` in one build never hides an
-unsound verdict on either side. What it costs is transparency — the merged
-report can say only "unknown" about the run as a whole, not "here is what
-each root was actually checked under." A per-root or per-fragment strategy
-field in `report.json` would recover that, at the cost of a schema change;
-not implemented here, since nothing unsound depends on it.
+So: a mixed host/target `panic_strategy` in one build never hides an unsound
+verdict on either side. Schema version 2 records the complete build
+environment on each checked root, so the report now preserves exactly which
+strategy and compiler settings established each verdict. The compatibility
+`panic_strategy` field at report level is still `None` when fragments
+disagree; readers that need a precise answer should use each root's
+`environment`.

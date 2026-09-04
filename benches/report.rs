@@ -3,7 +3,9 @@
 //! logic every root/rejection/pass verdict passes through.
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use no_alloc_report::{parse_root_spec, Frame, Report, RootVerdict, Verdict};
+use no_alloc_report::{
+    parse_root_spec, Environment, Frame, PanicStrategy, Report, RootVerdict, Verdict,
+};
 
 fn deep_report(depth: usize) -> Report {
     let chain = (0..depth)
@@ -18,9 +20,20 @@ fn deep_report(depth: usize) -> Report {
             root: "root".into(),
             instance: "root".into(),
             verdict: Verdict::Violation { chain },
+            environment: Some(Environment {
+                panic_strategy: PanicStrategy::Abort,
+                opt_level: "No".into(),
+                mir_opt_level: 1,
+                overflow_checks: false,
+                debug_assertions: false,
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                rustc_version: "1.99.0-nightly".into(),
+                all_crates: false,
+                build_std: false,
+            }),
         }],
         panic_strategy: Some(no_alloc_report::PanicStrategy::Abort),
-        selection_errors: vec![],
+        ..Report::default()
     }
 }
 

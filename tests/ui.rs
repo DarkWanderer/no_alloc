@@ -134,8 +134,15 @@ fn diagnostic_only(stderr: &str) -> String {
     filtered.replace(sysroot(), "<sysroot>")
 }
 
-/// Strips spans (see module doc) and keeps `expected.json` deterministic
-/// regardless of iteration order.
+/// Stand-in for whatever host triple actually built this fixture.
+/// `cargo-no-alloc` reads it from `rustc` and forces the checked build to
+/// that target, so the raw value flips between an x86-64 and an AArch64
+/// runner; the checker's own verdicts don't depend on it, so it's normalized
+/// away here rather than pinned to one architecture.
+const HOST_PLACEHOLDER: &str = "<host>";
+
+/// Strips spans and the host-dependent target triple (see module doc) and
+/// keeps `expected.json` deterministic regardless of iteration order.
 fn normalize(mut report: Report) -> Report {
     for root in &mut report.roots {
         match &mut root.verdict {
@@ -145,6 +152,9 @@ fn normalize(mut report: Report) -> Report {
                 }
             }
             Verdict::Pass | Verdict::NotInstantiated => {}
+        }
+        if let Some(environment) = &mut root.environment {
+            environment.target_triple = HOST_PLACEHOLDER.to_owned();
         }
     }
     report
@@ -491,6 +501,52 @@ fn environment_interfaces_encoded_flags_and_all_crates_work() {
         all_crates.status.success(),
         "{}",
         String::from_utf8_lossy(&all_crates.stderr)
+    );
+}
+
+/// `pure_arith`'s `--all-crates` case above only proves the flag doesn't
+/// *break* a build with no non-workspace markers to find — it would pass
+/// identically if `--all-crates` were a silent no-op (ADR 0004 flags this
+/// gap explicitly). This test proves the flag actually changes what gets
+/// instrumented: `all_crates_marker` depends on `all_crates_dep` (a sibling
+/// fixture, not a member of `all_crates_marker`'s own single-crate
+/// workspace) whose `#[no_alloc]` marker allocates. `ui_matrix` already
+/// covers the default-flags run (`all_crates_marker/expected.json` records
+/// zero checked roots); this covers the `--all-crates` run finding it.
+#[test]
+fn all_crates_flag_instruments_non_workspace_markers() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let default_flags = checker("all_crates_marker", &["--", "build"]);
+    assert!(
+        default_flags.status.success(),
+        "{}",
+        String::from_utf8_lossy(&default_flags.stderr)
+    );
+    let default_report: Report = serde_json::from_reader(
+        fs::File::open(ui_dir().join("all_crates_marker/target/no-alloc/report.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        default_report.roots.is_empty(),
+        "expected the non-workspace marker to be silently unchecked without --all-crates: {default_report:#?}"
+    );
+
+    let all_crates = checker("all_crates_marker", &["--all-crates", "--", "build"]);
+    assert!(!all_crates.status.success());
+    let all_crates_report: Report = serde_json::from_reader(
+        fs::File::open(ui_dir().join("all_crates_marker/target/no-alloc/report.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        all_crates_report
+            .roots
+            .iter()
+            .any(|root| root.root == "all_crates_dep::dep_allocates"
+                && matches!(root.verdict, Verdict::Violation { .. })),
+        "expected --all-crates to catch the non-workspace marker: {all_crates_report:#?}"
     );
 }
 
