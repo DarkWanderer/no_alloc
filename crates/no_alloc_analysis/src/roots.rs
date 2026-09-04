@@ -114,7 +114,8 @@ pub fn discover<'tcx>(tcx: TyCtxt<'tcx>) -> Discovery<'tcx> {
         // ICE surface instead. Either way, this is a case the macro itself
         // already rejects when reached through it normally.
         if marked && !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
-            selection_errors.push(format!("requested root `{path}` is not a function"));
+            let source = if selected { "requested" } else { "marked" };
+            selection_errors.push(format!("{source} root `{path}` is not a function"));
             continue;
         }
         if !marked || instantiated_defs.contains(&def_id) {

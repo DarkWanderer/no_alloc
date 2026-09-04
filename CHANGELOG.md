@@ -44,9 +44,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back correctly (ADR 0006).
 - UI fixtures may carry a `checker-args` file to run under a non-default
   checker configuration.
+- Report schema version 2 records the compiler and checker environment on
+  every checked root, including panic strategy, optimization settings, target,
+  rustc version, and the `--all-crates`/`--build-std` modes.
+- UI coverage for direct alloc/realloc leaves, tail calls, unknown intrinsics,
+  ordinary cross-crate calls, uninstantiated dependency roots, non-workspace
+  markers under `--all-crates`, clone/closure shims, explicit panic calls,
+  dynamic drop glue, and thread-local access.
 
 
 ### Fixed
+
+- Drop glue for `dyn Trait` is rejected instead of being mistaken for a safe
+  recursive cycle; the concrete destructor is selected through a vtable and
+  is not statically known.
+- Compiler-generated instances are classified exhaustively by `InstanceKind`
+  and `ShimKind`; audited synthesized bodies are traversed, while unaudited or
+  runtime-selected bodies reject by default.
+- `Rvalue::ThreadLocalRef` is no longer invisible to the terminator-only call
+  graph walk. It rejects because TLS access can invoke an unmodeled runtime
+  operation on some targets.
+- Hand-written root markers on non-functions are reported as selection errors
+  instead of being treated as callable MIR, and deep call-graph traversal uses
+  rustc's stack-growth guard.
+- Panic-scope documentation now distinguishes excluded MIR terminators from
+  explicit panic calls, which remain ordinary traversed call edges.
 
 - The UI fixture harness no longer blesses expectations from a checker run
   that produced no report. Previously a checker that aborted before writing

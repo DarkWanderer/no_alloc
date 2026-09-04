@@ -73,7 +73,6 @@ impl Callbacks for NoAllocCallbacks {
             // and drop the field entirely.
             panic_strategy: None,
             selection_errors: discovery.selection_errors,
-            environment: None,
             ..Report::default()
         };
         let mut any_hard_error = false;
@@ -93,6 +92,7 @@ impl Callbacks for NoAllocCallbacks {
                         root: root_path.clone(),
                         instance: root_path,
                         verdict: no_alloc_report::Verdict::NotInstantiated,
+                        environment: None,
                     });
                 }
                 DiscoveredRoot::Instance { root, instance } => {
@@ -106,6 +106,7 @@ impl Callbacks for NoAllocCallbacks {
                         root: root_path,
                         instance: instance.to_string(),
                         verdict: checked.verdict,
+                        environment: Some(environment(tcx)),
                     });
                 }
             }
@@ -114,7 +115,6 @@ impl Callbacks for NoAllocCallbacks {
         if checked_an_instance {
             let panic_strategy = no_alloc_analysis::traversal::panic_strategy(tcx);
             report.panic_strategy = Some(panic_strategy);
-            report.environment = Some(environment(tcx));
         }
 
         let fragment_dir = std::env::var_os("NO_ALLOC_FRAGMENT_DIR")

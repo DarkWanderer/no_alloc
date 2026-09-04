@@ -65,13 +65,14 @@ instrument every crate in the build (`RUSTC_WRAPPER`) instead.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
-written to `target/no-alloc/report.json`. It records the typed panic strategy
-the build used (`"panic_strategy": "unwind" | "abort" | "immediate_abort"`)
-and carries a versioned `environment` block with optimization and MIR
+written to `target/no-alloc/report.json`. Each checked root carries a versioned
+`environment` block with its typed panic strategy, optimization and MIR
 optimization levels, target triple, rustc version, and the
-`--all-crates`/`--build-std` settings. These values matter to what was proven;
-fragments with conflicting recorded environments are not silently presented
-as one coherent report.
+`--all-crates`/`--build-std` settings. These values matter to what was proven,
+and recording them per root preserves the real configuration when one Cargo
+build contains both host and target artifacts. The report-level
+`panic_strategy` remains for compatibility and is omitted when those artifacts
+disagree.
 
 Every invocation runs `cargo clean` on the checker's target first, so
 **every `cargo no-alloc` run is a from-scratch rebuild**, never an

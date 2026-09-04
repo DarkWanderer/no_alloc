@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
-fn current_schema_version() -> u32 {
-    CURRENT_SCHEMA_VERSION
+fn legacy_schema_version() -> u32 {
+    1
 }
 
 /// Build settings that can affect the MIR graph and therefore the verdict.
@@ -58,6 +58,11 @@ pub struct RootVerdict {
     /// Rendered instance, e.g. `foo::bar::<u32>`.
     pub instance: String,
     pub verdict: Verdict,
+    /// The exact compiler and checker settings under which this instance's
+    /// verdict was established. `NotInstantiated` has no verdict to qualify,
+    /// and reports written before schema version 2 omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
 }
 
 /// The panic strategy the checked build was compiled under.
@@ -89,9 +94,7 @@ pub struct Report {
     pub panic_strategy: Option<PanicStrategy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selection_errors: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub environment: Option<Environment>,
-    #[serde(default = "current_schema_version")]
+    #[serde(default = "legacy_schema_version")]
     pub schema_version: u32,
 }
 
@@ -101,7 +104,6 @@ impl Default for Report {
             roots: Vec::new(),
             panic_strategy: None,
             selection_errors: Vec::new(),
-            environment: None,
             schema_version: CURRENT_SCHEMA_VERSION,
         }
     }
@@ -138,7 +140,6 @@ impl Report {
     pub fn merge(reports: impl IntoIterator<Item = Self>) -> Self {
         let mut merged = Self::default();
         let mut strategies = std::collections::BTreeSet::new();
-        let mut environments = std::collections::BTreeSet::new();
         // A report that carries verdicts but no strategy makes the result
         // unknowable, and must not be quietly relabelled by a sibling that
         // does carry one — that would put a strategy on roots whose panic
@@ -153,17 +154,10 @@ impl Report {
         // in either direction — and a cross-crate generic produces exactly
         // such a fragment in the defining crate on every ordinary build.
         let mut unknown_over_verdicts = false;
-        let mut unknown_environment_over_verdicts = false;
         for report in reports {
             let checked_an_instance = report.checked_an_instance();
             if report.panic_strategy.is_none() && checked_an_instance {
                 unknown_over_verdicts = true;
-            }
-            if report.environment.is_none() && checked_an_instance {
-                unknown_environment_over_verdicts = true;
-            }
-            if checked_an_instance {
-                environments.extend(report.environment);
             }
             merged.roots.extend(report.roots);
             merged.selection_errors.extend(report.selection_errors);
@@ -176,20 +170,21 @@ impl Report {
             (single, None) if !unknown_over_verdicts => single,
             _ => None,
         };
-        let environment_count = environments.len();
-        let mut found = environments.into_iter();
-        merged.environment = match (found.next(), found.next()) {
-            (single, None) if !unknown_environment_over_verdicts => single,
-            _ => None,
-        };
-        if environment_count > 1 {
-            merged.selection_errors.push(
-                "report fragments containing checked instances were built under different configurations"
-                    .to_string(),
-            );
+        for root in &merged.roots {
+            if !matches!(root.verdict, Verdict::NotInstantiated) && root.environment.is_none() {
+                merged.selection_errors.push(format!(
+                    "checked root instance `{}` does not record its build environment",
+                    root.instance
+                ));
+            }
         }
         merged.roots.sort_by(|a, b| {
-            (&a.root, &a.instance, &a.verdict).cmp(&(&b.root, &b.instance, &b.verdict))
+            (&a.root, &a.instance, &a.verdict, &a.environment).cmp(&(
+                &b.root,
+                &b.instance,
+                &b.verdict,
+                &b.environment,
+            ))
         });
         merged.roots.dedup();
         let instantiated: std::collections::HashSet<_> = merged
@@ -235,19 +230,37 @@ impl ReportFragment {
 mod tests {
     use super::*;
 
+    fn sample_environment(target_triple: &str) -> Environment {
+        Environment {
+            panic_strategy: PanicStrategy::Unwind,
+            opt_level: "No".to_string(),
+            mir_opt_level: 1,
+            target_triple: target_triple.to_string(),
+            rustc_version: "1.99.0-nightly".to_string(),
+            all_crates: false,
+            build_std: false,
+        }
+    }
+
+    fn checked_root(root: &str, instance: &str, verdict: Verdict) -> RootVerdict {
+        RootVerdict {
+            root: root.into(),
+            instance: instance.into(),
+            verdict,
+            environment: Some(sample_environment("x86_64-unknown-linux-gnu")),
+        }
+    }
+
     #[test]
     fn success_requires_all_roots_pass_or_not_instantiated() {
         let report = Report {
             roots: vec![
-                RootVerdict {
-                    root: "a".into(),
-                    instance: "a".into(),
-                    verdict: Verdict::Pass,
-                },
+                checked_root("a", "a", Verdict::Pass),
                 RootVerdict {
                     root: "b".into(),
                     instance: "b::<u32>".into(),
                     verdict: Verdict::NotInstantiated,
+                    environment: None,
                 },
             ],
             ..Report::default()
@@ -258,11 +271,7 @@ mod tests {
     #[test]
     fn violation_fails_the_report() {
         let report = Report {
-            roots: vec![RootVerdict {
-                root: "a".into(),
-                instance: "a".into(),
-                verdict: Verdict::Violation { chain: vec![] },
-            }],
+            roots: vec![checked_root("a", "a", Verdict::Violation { chain: vec![] })],
             ..Report::default()
         };
         assert!(!report.is_success());
@@ -271,11 +280,7 @@ mod tests {
     #[test]
     fn write_to_file_then_read_back() {
         let report = Report {
-            roots: vec![RootVerdict {
-                root: "a".into(),
-                instance: "a".into(),
-                verdict: Verdict::Pass,
-            }],
+            roots: vec![checked_root("a", "a", Verdict::Pass)],
             ..Report::default()
         };
         let path = std::env::temp_dir().join(format!(
@@ -304,6 +309,7 @@ mod tests {
                     }],
                     reason: "dyn dispatch".into(),
                 },
+                environment: Some(sample_environment("x86_64-unknown-linux-gnu")),
             }],
             ..Report::default()
         };
@@ -336,11 +342,7 @@ mod tests {
     #[test]
     fn checked_an_instance_ignores_not_instantiated_markers() {
         let checked = Report {
-            roots: vec![RootVerdict {
-                root: "a".into(),
-                instance: "a".into(),
-                verdict: Verdict::Pass,
-            }],
+            roots: vec![checked_root("a", "a", Verdict::Pass)],
             ..Report::default()
         };
         assert!(checked.checked_an_instance());
@@ -349,6 +351,7 @@ mod tests {
                 root: "dependency::root".into(),
                 instance: "dependency::root".into(),
                 verdict: Verdict::NotInstantiated,
+                environment: None,
             }],
             ..Report::default()
         };
@@ -391,11 +394,7 @@ mod tests {
     /// verdicts that never had it. It also keeps `merge` associative.
     #[test]
     fn merge_does_not_relabel_verdicts_whose_strategy_is_unknown() {
-        let root = RootVerdict {
-            root: "a".into(),
-            instance: "a".into(),
-            verdict: Verdict::Pass,
-        };
+        let root = checked_root("a", "a", Verdict::Pass);
         let known = Report {
             roots: vec![root.clone()],
             panic_strategy: Some(PanicStrategy::ImmediateAbort),
@@ -424,6 +423,7 @@ mod tests {
                 root: "dependency::root".into(),
                 instance: "dependency::root".into(),
                 verdict: Verdict::NotInstantiated,
+                environment: None,
             }],
             panic_strategy: None,
             ..Report::default()
@@ -461,54 +461,64 @@ mod tests {
         assert_eq!(legacy.panic_strategy, None);
     }
 
-    fn sample_environment(target_triple: &str) -> Environment {
-        Environment {
-            panic_strategy: PanicStrategy::Unwind,
-            opt_level: "No".to_string(),
-            mir_opt_level: 1,
-            target_triple: target_triple.to_string(),
-            rustc_version: "1.99.0-nightly".to_string(),
-            all_crates: false,
-            build_std: false,
-        }
-    }
-
     #[test]
-    fn merge_keeps_environment_for_matching_checked_fragments() {
+    fn merge_keeps_environment_on_checked_roots() {
         let environment = sample_environment("x86_64-unknown-linux-gnu");
         let checked = |environment| Report {
             roots: vec![RootVerdict {
                 root: "a".into(),
                 instance: "a".into(),
                 verdict: Verdict::Pass,
+                environment,
             }],
-            environment,
             ..Report::default()
         };
         let merged = Report::merge([
             checked(Some(environment.clone())),
             checked(Some(environment.clone())),
         ]);
-        assert_eq!(merged.environment, Some(environment));
+        assert_eq!(merged.roots[0].environment, Some(environment));
         assert!(merged.selection_errors.is_empty());
     }
 
     #[test]
-    fn merge_rejects_conflicting_checked_environments() {
+    fn merge_preserves_distinct_checked_environments() {
         let checked = |environment| Report {
             roots: vec![RootVerdict {
                 root: "a".into(),
                 instance: "a".into(),
                 verdict: Verdict::Pass,
+                environment: Some(environment),
             }],
-            environment: Some(environment),
             ..Report::default()
         };
         let merged = Report::merge([
             checked(sample_environment("x86_64-unknown-linux-gnu")),
             checked(sample_environment("aarch64-unknown-linux-gnu")),
         ]);
-        assert_eq!(merged.environment, None);
+        assert_eq!(merged.roots.len(), 2);
+        assert_eq!(
+            merged.roots[0].environment.as_ref().unwrap().target_triple,
+            "aarch64-unknown-linux-gnu"
+        );
+        assert_eq!(
+            merged.roots[1].environment.as_ref().unwrap().target_triple,
+            "x86_64-unknown-linux-gnu"
+        );
+        assert!(merged.is_success());
+    }
+
+    #[test]
+    fn merge_rejects_a_checked_root_without_an_environment() {
+        let merged = Report::merge([Report {
+            roots: vec![RootVerdict {
+                root: "legacy::root".into(),
+                instance: "legacy::root".into(),
+                verdict: Verdict::Pass,
+                environment: None,
+            }],
+            ..Report::default()
+        }]);
         assert_eq!(merged.selection_errors.len(), 1);
         assert!(!merged.is_success());
     }
@@ -519,12 +529,14 @@ mod tests {
     }
 
     #[test]
+    fn report_without_a_schema_version_is_legacy() {
+        let legacy: Report = serde_json::from_str(r#"{"roots":[]}"#).unwrap();
+        assert_eq!(legacy.schema_version, 1);
+    }
+
+    #[test]
     fn merge_is_sorted_and_deduplicated() {
-        let root = RootVerdict {
-            root: "z".into(),
-            instance: "z".into(),
-            verdict: Verdict::Pass,
-        };
+        let root = checked_root("z", "z", Verdict::Pass);
         let merged = Report::merge([
             Report {
                 roots: vec![root.clone()],
@@ -549,15 +561,16 @@ mod tests {
                     root: "dependency::root".into(),
                     instance: "root".into(),
                     verdict: Verdict::NotInstantiated,
+                    environment: None,
                 }],
                 ..Report::default()
             },
             Report {
-                roots: vec![RootVerdict {
-                    root: "dependency::root".into(),
-                    instance: "dependency::root::<u32>".into(),
-                    verdict: Verdict::Pass,
-                }],
+                roots: vec![checked_root(
+                    "dependency::root",
+                    "dependency::root::<u32>",
+                    Verdict::Pass,
+                )],
                 ..Report::default()
             },
         ]);

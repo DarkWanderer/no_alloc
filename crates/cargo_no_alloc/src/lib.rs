@@ -753,7 +753,7 @@ mod tests {
     static FAKE_RUSTC: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
-    use no_alloc_report::RootVerdict;
+    use no_alloc_report::{Environment, RootVerdict};
     use std::os::unix::fs::PermissionsExt;
 
     // Every pre-existing test wants an `Invocation`; only the new
@@ -1008,14 +1008,23 @@ mod tests {
             line!()
         ));
         std::fs::create_dir_all(&directory)?;
-        let root = |name: &str| RootVerdict {
+        let root = |name: &str, panic_strategy| RootVerdict {
             root: name.to_owned(),
             instance: name.to_owned(),
             verdict: Verdict::Pass,
+            environment: Some(Environment {
+                panic_strategy,
+                opt_level: "No".into(),
+                mir_opt_level: 1,
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                rustc_version: "1.99.0-nightly".into(),
+                all_crates: false,
+                build_std: true,
+            }),
         };
         ReportFragment {
             report: Report {
-                roots: vec![root("target::checked")],
+                roots: vec![root("target::checked", PanicStrategy::ImmediateAbort)],
                 panic_strategy: Some(PanicStrategy::ImmediateAbort),
                 ..Report::default()
             },
@@ -1024,7 +1033,7 @@ mod tests {
         .write_to_file(&directory.join("target.json"))?;
         ReportFragment {
             report: Report {
-                roots: vec![root("build_script::checked")],
+                roots: vec![root("build_script::checked", PanicStrategy::Unwind)],
                 panic_strategy: Some(PanicStrategy::Unwind),
                 ..Report::default()
             },
@@ -1035,6 +1044,9 @@ mod tests {
         let (report, any_immediate_abort) = aggregate(&directory, &[])?;
         // The report itself is silent about the disagreement, as designed...
         assert_eq!(report.panic_strategy, None);
+        assert_eq!(report.roots.len(), 2);
+        assert_ne!(report.roots[0].environment, report.roots[1].environment);
+        assert!(report.selection_errors.is_empty());
         // ...but the safety-net signal still catches the mix.
         assert!(any_immediate_abort);
         assert!(mixed_sysroot_panic_strategy(false, any_immediate_abort));
@@ -1055,6 +1067,7 @@ mod tests {
                 root: "a".into(),
                 instance: "a".into(),
                 verdict: Verdict::Pass,
+                environment: None,
             }],
             panic_strategy: Some(PanicStrategy::ImmediateAbort),
             ..Report::default()

@@ -37,6 +37,15 @@
             "span": null
           }
         ]
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "target_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
       }
     },
     {
@@ -44,17 +53,18 @@
       "instance": "generic_dep::root::<Pure>",
       "verdict": {
         "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "target_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
       }
     }
   ],
-  "environment": {
-    "panic_strategy": "Unwind",
-    "opt_level": "No",
-    "mir_opt_level": 1,
-    "target_triple": "x86_64-unknown-linux-gnu",
-    "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
-    "all_crates": false,
-    "build_std": false
-  },
+  "panic_strategy": "unwind",
   "schema_version": 2
 }
