@@ -31,6 +31,7 @@ fn environment(tcx: TyCtxt<'_>) -> Environment {
         panic_strategy: no_alloc_analysis::traversal::panic_strategy(tcx),
         opt_level: format!("{:?}", sess.opts.optimize),
         mir_opt_level: sess.mir_opt_level() as u32,
+        overflow_checks: sess.overflow_checks(),
         target_triple: sess.opts.target_triple.tuple().to_string(),
         rustc_version: rustc_interface::util::rustc_version_str()
             .unwrap_or("unknown")

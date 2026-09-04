@@ -14,6 +14,12 @@ pub struct Environment {
     pub panic_strategy: PanicStrategy,
     pub opt_level: String,
     pub mir_opt_level: u32,
+    /// `-C overflow-checks`, resolved the way rustc resolves it: the
+    /// explicit flag if set, else `-C debug-assertions`. It gates `Assert`
+    /// terminators for integer arithmetic, so two builds can share every
+    /// other field here and still disagree on whether an arithmetic root
+    /// stays `Pass` or turns `Rejected` under `panic=unwind` (ADR 0003).
+    pub overflow_checks: bool,
     pub target_triple: String,
     pub rustc_version: String,
     pub all_crates: bool,
@@ -131,10 +137,15 @@ impl Report {
 
     pub fn is_success(&self) -> bool {
         self.selection_errors.is_empty()
-            && self
-                .roots
-                .iter()
-                .all(|r| matches!(r.verdict, Verdict::Pass | Verdict::NotInstantiated))
+            && self.roots.iter().all(|r| match r.verdict {
+                // A `Pass` proves nothing without knowing the settings it
+                // was proven under (ADR 0006) — a legacy, environment-less
+                // report must not read back as a success just because
+                // nobody routed it through `Report::merge` first.
+                Verdict::Pass => r.environment.is_some(),
+                Verdict::NotInstantiated => true,
+                Verdict::Violation { .. } | Verdict::Rejected { .. } => false,
+            })
     }
 
     pub fn merge(reports: impl IntoIterator<Item = Self>) -> Self {
@@ -235,6 +246,7 @@ mod tests {
             panic_strategy: PanicStrategy::Unwind,
             opt_level: "No".to_string(),
             mir_opt_level: 1,
+            overflow_checks: false,
             target_triple: target_triple.to_string(),
             rustc_version: "1.99.0-nightly".to_string(),
             all_crates: false,
@@ -266,6 +278,25 @@ mod tests {
             ..Report::default()
         };
         assert!(report.is_success());
+    }
+
+    #[test]
+    fn is_success_rejects_a_pass_with_no_recorded_environment() {
+        // A schema-1 report deserializes a `Pass` with `environment: None`
+        // (the field defaults on read). `Report::merge` catches this via a
+        // `selection_error`, but `is_success` must reject it on its own too
+        // — a caller that reads a report straight off disk, without routing
+        // it through `merge` first, must not see this as a success.
+        let report = Report {
+            roots: vec![RootVerdict {
+                root: "legacy::root".into(),
+                instance: "legacy::root".into(),
+                verdict: Verdict::Pass,
+                environment: None,
+            }],
+            ..Report::default()
+        };
+        assert!(!report.is_success());
     }
 
     #[test]

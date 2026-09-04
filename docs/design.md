@@ -40,9 +40,9 @@ reported as `NotInstantiated` unless another fragment contains an instance.
 
 Every rustc process atomically writes a uniquely named report fragment. Each
 checked root records the `Environment` (panic strategy, opt-level,
-mir-opt-level, target triple, rustc version, `--all-crates`/`--build-std`) its
-verdict was proven under; `NotInstantiated` markers have no verdict and no
-environment. This per-root association preserves legitimate differences
+mir-opt-level, overflow-checks, target triple, rustc version,
+`--all-crates`/`--build-std`) its verdict was proven under; `NotInstantiated`
+markers have no verdict and no environment. This per-root association preserves legitimate differences
 between host and target artifacts in one Cargo build. A checked root from a
 legacy fragment with no recorded environment becomes a `selection_error`
 rather than being silently relabelled. The wrapper merges fragments

@@ -134,8 +134,15 @@ fn diagnostic_only(stderr: &str) -> String {
     filtered.replace(sysroot(), "<sysroot>")
 }
 
-/// Strips spans (see module doc) and keeps `expected.json` deterministic
-/// regardless of iteration order.
+/// Stand-in for whatever host triple actually built this fixture.
+/// `cargo-no-alloc` reads it from `rustc` and forces the checked build to
+/// that target, so the raw value flips between an x86-64 and an AArch64
+/// runner; the checker's own verdicts don't depend on it, so it's normalized
+/// away here rather than pinned to one architecture.
+const HOST_PLACEHOLDER: &str = "<host>";
+
+/// Strips spans and the host-dependent target triple (see module doc) and
+/// keeps `expected.json` deterministic regardless of iteration order.
 fn normalize(mut report: Report) -> Report {
     for root in &mut report.roots {
         match &mut root.verdict {
@@ -145,6 +152,9 @@ fn normalize(mut report: Report) -> Report {
                 }
             }
             Verdict::Pass | Verdict::NotInstantiated => {}
+        }
+        if let Some(environment) = &mut root.environment {
+            environment.target_triple = HOST_PLACEHOLDER.to_owned();
         }
     }
     report

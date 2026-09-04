@@ -24,6 +24,7 @@ fn deep_report(depth: usize) -> Report {
                 panic_strategy: PanicStrategy::Abort,
                 opt_level: "No".into(),
                 mir_opt_level: 1,
+                overflow_checks: false,
                 target_triple: "x86_64-unknown-linux-gnu".into(),
                 rustc_version: "1.99.0-nightly".into(),
                 all_crates: false,
