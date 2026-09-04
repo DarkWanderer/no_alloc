@@ -20,6 +20,14 @@ pub struct Environment {
     /// other field here and still disagree on whether an arithmetic root
     /// stays `Pass` or turns `Rejected` under `panic=unwind` (ADR 0003).
     pub overflow_checks: bool,
+    /// `-C debug-assertions` (`cfg(debug_assertions)`, the same knob
+    /// `debug_assert!`/`debug_assert_eq!` expand against). Unlike
+    /// `overflow_checks`, this doesn't add terminators to a fixed MIR body —
+    /// it decides which body macro expansion produces in the first place, so
+    /// a root gated behind `#[cfg(debug_assertions)]` can add or remove an
+    /// allocating call path entirely between two builds that would otherwise
+    /// record an identical `Environment`.
+    pub debug_assertions: bool,
     pub target_triple: String,
     pub rustc_version: String,
     pub all_crates: bool,
@@ -247,6 +255,7 @@ mod tests {
             opt_level: "No".to_string(),
             mir_opt_level: 1,
             overflow_checks: false,
+            debug_assertions: false,
             target_triple: target_triple.to_string(),
             rustc_version: "1.99.0-nightly".to_string(),
             all_crates: false,

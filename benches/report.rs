@@ -25,6 +25,7 @@ fn deep_report(depth: usize) -> Report {
                 opt_level: "No".into(),
                 mir_opt_level: 1,
                 overflow_checks: false,
+                debug_assertions: false,
                 target_triple: "x86_64-unknown-linux-gnu".into(),
                 rustc_version: "1.99.0-nightly".into(),
                 all_crates: false,

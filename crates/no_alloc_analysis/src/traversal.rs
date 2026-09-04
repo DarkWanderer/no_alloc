@@ -36,7 +36,7 @@
 
 use crate::leaf::allocates;
 use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
-use rustc_middle::mir::{Body, TerminatorKind};
+use rustc_middle::mir::{Body, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
@@ -353,18 +353,46 @@ fn resolve_shim_body<'tcx>(
 /// `PlaceMention`, `AscribeUserType`, `Coverage`, `ConstEvalCounter`, `Nop`,
 /// `BackwardIncompatibleDropHint`) were checked against their doc comments
 /// in `rustc_middle::mir::syntax` and confirmed call-free.
+///
+/// Both matches below name every variant instead of falling back to `_`, on
+/// purpose: a `_` arm would keep compiling — and silently return `None`, the
+/// "no edge" answer — the day the pinned nightly adds a new `StatementKind`
+/// or `Rvalue` variant that was never audited against this reasoning. Naming
+/// them all turns that into a compile error here instead, which is the only
+/// way to *force* the audit rather than hope someone remembers it.
 fn classify_statements<'tcx>(statements: &[rustc_middle::mir::Statement<'tcx>]) -> Vec<Edge<'tcx>> {
     statements
         .iter()
         .filter_map(|statement| match &statement.kind {
-            rustc_middle::mir::StatementKind::Assign(assign) => match assign.1 {
-                rustc_middle::mir::Rvalue::ThreadLocalRef(_) => Some(Edge::Unresolved(
+            StatementKind::Assign(assign) => match assign.1 {
+                Rvalue::ThreadLocalRef(_) => Some(Edge::Unresolved(
                     "thread-local access is not modeled (may call into the TLS runtime on some targets)"
                         .to_string(),
                 )),
-                _ => None,
+                Rvalue::Use(..)
+                | Rvalue::Repeat(..)
+                | Rvalue::Ref(..)
+                | Rvalue::RawPtr(..)
+                | Rvalue::Cast(..)
+                | Rvalue::BinaryOp(..)
+                | Rvalue::UnaryOp(..)
+                | Rvalue::Discriminant(..)
+                | Rvalue::Aggregate(..)
+                | Rvalue::CopyForDeref(..)
+                | Rvalue::WrapUnsafeBinder(..)
+                | Rvalue::Reborrow(..) => None,
             },
-            _ => None,
+            StatementKind::FakeRead(..)
+            | StatementKind::SetDiscriminant { .. }
+            | StatementKind::StorageLive(..)
+            | StatementKind::StorageDead(..)
+            | StatementKind::PlaceMention(..)
+            | StatementKind::AscribeUserType(..)
+            | StatementKind::Coverage(..)
+            | StatementKind::Intrinsic(..)
+            | StatementKind::ConstEvalCounter
+            | StatementKind::Nop
+            | StatementKind::BackwardIncompatibleDropHint { .. } => None,
         })
         .collect()
 }
