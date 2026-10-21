@@ -392,6 +392,36 @@ fn cached_warn_only_does_not_hide_strict_failure() {
     assert!(!report.is_success());
 }
 
+/// A second run must not find its workspace units fresh: the driver would
+/// never run on them, and their roots would silently drop out of a report
+/// that still exits 0. `cargo clean --workspace` alone only clears the dev
+/// profile, so this pins the non-default profiles too.
+#[test]
+fn rerun_rechecks_non_default_profiles() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let report_path = ui_dir().join("pure_arith/target/no-alloc/report.json");
+    for profile in [&["--release"][..], &["--profile", "release"][..]] {
+        for _ in 0..2 {
+            let mut args = vec!["--", "build"];
+            args.extend_from_slice(profile);
+            let output = checker("pure_arith", &args);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: Report =
+                serde_json::from_reader(fs::File::open(&report_path).unwrap()).unwrap();
+            assert!(
+                !report.roots.is_empty(),
+                "{profile:?}: a rerun reported no roots, so the driver did not run"
+            );
+        }
+    }
+}
+
 #[test]
 fn unmatched_and_non_function_roots_are_reported() {
     let _guard = CHECKER_TEST_LOCK

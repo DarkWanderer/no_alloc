@@ -131,8 +131,9 @@ for the full terminator classification and rationale.
 
 **`--immediate-abort` is the exception, and the stronger guarantee.** It
 compiles the crate and the standard library with `-Cpanic=immediate-abort`,
-where every panic — `Assert` included — lowers to a bare `abort()` with no
-handler call. The traversal then walks panic paths as ordinary edges and
+where every panic — including the panic lang item a failing `Assert` calls —
+lowers to a bare `abort()` with no handler call. The traversal then walks
+panic paths, `Assert`'s included, as ordinary edges and
 finds `core::intrinsics::abort` at the end of them, so in that mode there is
 no panic-path carve-out at all. It costs a full sysroot rebuild per run. See
 [ADR 0006](adr/0006-immediate-abort-checking-mode.md).

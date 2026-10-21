@@ -499,6 +499,7 @@ fn clear_checker_artifacts(
         clean.arg("--workspace");
     }
     clean
+        .args(clean_selection_args(&inv.cargo_args))
         .arg("--target")
         .arg(host)
         .arg("--target-dir")
@@ -506,6 +507,46 @@ fn clear_checker_artifacts(
     let status = cargo_status(clean)?;
     ensure!(status.success(), "Cargo clean exited with {status}");
     Ok(())
+}
+
+/// The build's own options that decide *which* artifacts `cargo clean`
+/// must remove. Without them `cargo clean --workspace` clears only the dev
+/// profile of the workspace in the current directory, so a `--release` or
+/// `--profile` build (or one of another `--manifest-path`) found its
+/// workspace units fresh, the driver never ran on them, and their roots
+/// silently dropped out of a report that still read as a success.
+fn clean_selection_args(cargo_args: &[String]) -> Vec<String> {
+    const WITH_VALUE: [&str; 3] = ["--profile", "--manifest-path", "--config"];
+    let mut selected = Vec::new();
+    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--release" || arg == "-r" {
+            selected.push(arg.clone());
+        } else if WITH_VALUE.contains(&arg.as_str()) {
+            selected.push(arg.clone());
+            selected.extend(args.next().cloned());
+        } else if WITH_VALUE.iter().any(|flag| {
+            arg.strip_prefix(flag)
+                .is_some_and(|rest| rest.starts_with('='))
+        }) {
+            selected.push(arg.clone());
+        }
+    }
+    selected
+}
+
+/// A Cargo failure can stop the build before every wrapped unit was
+/// compiled, so the fragments on disk may cover only part of it. When
+/// nothing else already marks the report as failing, say so in the
+/// persisted file — not only in this process's exit code — so a consumer
+/// reading `report.json` cannot take a partial run for a passing one.
+fn taint_report_for_failed_build(report: &mut Report, cargo_succeeded: bool) {
+    if !cargo_succeeded && report.is_success() {
+        report.selection_errors.push(
+            "Cargo did not complete the build, so some roots may never have been checked"
+                .to_owned(),
+        );
+    }
 }
 
 /// `Report::merge`'s agreed-strategy answer is the right thing for
@@ -565,6 +606,23 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         }
         ParsedArgs::Run(inv) => inv,
     };
+    let cwd = env::current_dir().context("failed to determine current directory")?;
+    let target_dir = cwd.join("target/no-alloc");
+    let fragment_dir = target_dir.join("fragments");
+    fs::create_dir_all(cwd.join("target"))?;
+    let lock = File::create(cwd.join("target/no-alloc.lock"))?;
+    lock.lock_exclusive()
+        .context("failed to lock target/no-alloc.lock")?;
+    // Every exit below this point that bails before the final write would
+    // otherwise leave the previous run's report in place, readable as this
+    // run's result.
+    let report_path = target_dir.join("report.json");
+    match fs::remove_file(&report_path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error).context("failed to remove the previous report.json");
+        }
+        _ => {}
+    }
     // Checked before anything else touches Cargo: a project pinned to the
     // wrong toolchain otherwise fails much further down, in
     // `sysroot_lib_dir`, as a raw dynamic-linker error instead of this
@@ -584,14 +642,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         inv.roots.sort();
         inv.roots.dedup();
     }
-
-    let cwd = env::current_dir().context("failed to determine current directory")?;
-    let target_dir = cwd.join("target/no-alloc");
-    let fragment_dir = target_dir.join("fragments");
-    fs::create_dir_all(cwd.join("target"))?;
-    let lock = File::create(cwd.join("target/no-alloc.lock"))?;
-    lock.lock_exclusive()
-        .context("failed to lock target/no-alloc.lock")?;
 
     // The strategy can arrive through the caller's own flags instead of the
     // checker option, and then nothing rebuilds the sysroot: the crate
@@ -696,8 +746,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // in the artifact, not only on stderr.
     let mixed_sysroot = mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort);
     taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
+    taint_report_for_failed_build(&mut report, cargo_status.success());
     report
-        .write_to_file(&target_dir.join("report.json"))
+        .write_to_file(&report_path)
         .context("failed to write final report.json")?;
     for error in &report.selection_errors {
         eprintln!(
@@ -1431,6 +1482,70 @@ mod tests {
         Ok(())
     }
 
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn clean_selection_args_forwards_profile_and_workspace_selection() {
+        assert_eq!(
+            clean_selection_args(&strings(&[
+                "--release",
+                "-p",
+                "a",
+                "--profile",
+                "custom",
+                "--manifest-path=other/Cargo.toml",
+                "--config",
+                "profile.custom.inherits='release'",
+                "--features",
+                "x",
+            ])),
+            strings(&[
+                "--release",
+                "--profile",
+                "custom",
+                "--manifest-path=other/Cargo.toml",
+                "--config",
+                "profile.custom.inherits='release'",
+            ])
+        );
+        assert_eq!(
+            clean_selection_args(&strings(&["-r", "--profile=bench", "--manifest-path", "m"])),
+            strings(&["-r", "--profile=bench", "--manifest-path", "m"])
+        );
+    }
+
+    #[test]
+    fn clean_selection_args_stops_at_the_test_runner_separator() {
+        assert_eq!(
+            clean_selection_args(&strings(&["--lib", "--", "--release", "--profile", "x"])),
+            Vec::<String>::new()
+        );
+        // A look-alike flag is not a profile selection.
+        assert!(clean_selection_args(&strings(&["--profiler", "--releases"])).is_empty());
+    }
+
+    #[test]
+    fn failed_build_taints_an_otherwise_passing_report() {
+        let mut report = Report::default();
+        assert!(report.is_success());
+        taint_report_for_failed_build(&mut report, true);
+        assert!(report.is_success());
+        taint_report_for_failed_build(&mut report, false);
+        assert!(!report.is_success());
+    }
+
+    #[test]
+    fn failed_build_does_not_add_noise_to_an_already_failing_report() {
+        let mut report = Report {
+            selection_errors: vec!["already failing".into()],
+            ..Report::default()
+        };
+        taint_report_for_failed_build(&mut report, false);
+        assert_eq!(report.selection_errors, vec!["already failing".to_owned()]);
+    }
+
     #[test]
     fn orchestration_runs_with_fake_cargo_and_rustc() -> Result<()> {
         // Also writes executables and runs them, so it shares the lock (see
@@ -1456,7 +1571,7 @@ mod tests {
         let fake_cargo = directory.join("cargo");
         std::fs::write(
             &fake_cargo,
-            "#!/bin/sh\nif [ \"$1\" = clean ]; then exit 0; fi\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
+            "#!/bin/sh\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
         )?;
         for executable in [&fake_rustc, &fake_cargo] {
             let mut permissions = std::fs::metadata(executable)?.permissions();
@@ -1504,6 +1619,38 @@ mod tests {
             "--list".to_owned(),
         ]);
 
+        // A failed Cargo run must leave a report that does not read as a
+        // success, and must clean the profile it is about to build. A
+        // stale passing report from an earlier run must not survive either.
+        let stale_report = directory.join("target/no-alloc/report.json");
+        let failed_run = (|| -> Result<()> {
+            std::fs::write(&stale_report, r#"{"roots":[]}"#)?;
+            // SAFETY: same single-mutator condition as above.
+            unsafe { std::env::set_var("FAKE_CARGO_FAIL", "1") };
+            let failed = run(strings(&[
+                "cargo-no-alloc",
+                "--root=fake::root",
+                "--",
+                "build",
+                "--release",
+            ]));
+            ensure!(failed.is_err(), "a failed Cargo run must fail the check");
+            let report: Report = serde_json::from_reader(std::fs::File::open(&stale_report)?)?;
+            ensure!(
+                !report.is_success(),
+                "report.json after a failed build must not read as a success"
+            );
+            let clean_log = std::fs::read_to_string(directory.join("clean.log"))?;
+            ensure!(
+                clean_log
+                    .lines()
+                    .last()
+                    .is_some_and(|line| line.contains("--release")),
+                "cargo clean must target the built profile: {clean_log}"
+            );
+            Ok(())
+        })();
+
         std::env::set_current_dir(original_directory)?;
         for (name, value) in originals {
             // SAFETY: restoration occurs before this test returns, under the
@@ -1517,6 +1664,7 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(directory)?;
-        result
+        result?;
+        failed_run
     }
 }

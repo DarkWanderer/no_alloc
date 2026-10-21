@@ -78,8 +78,9 @@ exclusion, not a proof, and it is drawn by terminator shape: an explicit
 scope and rejects if unresolved (`README.md`, "Guarantee and limitations").
 Under `--immediate-abort`
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
-std with `-Cpanic=immediate-abort` so panic paths are real, walkable edges
-ending in `intrinsics::abort` and need no exclusion.
+std with `-Cpanic=immediate-abort`, panic paths, including the lang item an
+assertion calls, are real, walkable edges ending in `intrinsics::abort` and
+need no exclusion.
 [`iterators.md`](iterators.md) is the measured consequence.
 
 ## Verification
