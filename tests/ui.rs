@@ -332,6 +332,16 @@ fn stable_build_has_zero_footprint() {
         .arg("--target-dir")
         .arg(&target_dir)
         .current_dir(&case_dir)
+        // Under `cargo llvm-cov` these carry `-Cinstrument-coverage`, so the
+        // stable toolchain's build scripts would write raw profiles in its
+        // own LLVM's format, which the pinned nightly's `llvm-profdata`
+        // cannot merge once stable moves to a newer LLVM. The check is about
+        // an ordinary stable build, which has none of them.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("LLVM_PROFILE_FILE")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .output();
 
     let output = match output {
