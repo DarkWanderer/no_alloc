@@ -43,10 +43,15 @@ library* with `-Cpanic=immediate-abort`, by adding `-Zunstable-options
 `--build-std` (the precompiled sysroot was built with a different strategy;
 mixing them is what the flag exists to avoid).
 
-Under that strategy every panic — `Assert`, `panic_fmt`, `expect_failed`,
-`panic_nounwind_fmt` — compiles to a bare `abort()` with no handler call.
-Combined with ADR 0005's intrinsic table, the traversal now *walks* the panic
-path to its end and finds `core::intrinsics::abort` there. Nothing is
+Under that strategy every panic — `panic_fmt`, `expect_failed`,
+`panic_nounwind_fmt`, and the panic lang items a failing `Assert` is lowered
+to call — compiles to a bare `abort()` with no handler call. Combined with
+ADR 0005's intrinsic table, the traversal now *walks* the panic path to its
+end and finds `core::intrinsics::abort` there. For `Assert` that means
+resolving the lang item codegen calls and walking it (amended 2026-10-21:
+it was previously skipped as under `panic=abort`, so this mode's claim
+rested on an assumption rather than a check; `tests/ui/assert_immediate_abort`
+pins it). Nothing is
 excluded from the guarantee in this mode: the panic path is checked, and it
 passes because it genuinely cannot allocate.
 

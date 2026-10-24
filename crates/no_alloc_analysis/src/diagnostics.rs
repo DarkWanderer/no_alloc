@@ -22,9 +22,16 @@ pub fn emit<'tcx>(tcx: TyCtxt<'tcx>, checked: &Checked<'tcx>, warn_only: bool) -
     };
 
     let Some(&(_, root_span)) = checked.chain_spans.first() else {
-        // Nothing to anchor a span on (shouldn't happen: a non-Pass verdict
-        // always has at least the root's own frame) — nothing sound to emit.
-        return false;
+        // Shouldn't happen: a non-Pass verdict always has at least the
+        // root's own frame. If it ever does, the finding still has to fail
+        // the build — a driver run without `cargo no-alloc` has nothing
+        // else to fail it.
+        if warn_only {
+            tcx.dcx().warn(headline);
+            return false;
+        }
+        tcx.dcx().err(headline);
+        return true;
     };
 
     if warn_only {

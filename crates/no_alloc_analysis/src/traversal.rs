@@ -145,7 +145,14 @@ fn visit<'tcx>(
     // graceful "no body" signal.
     if let InstanceKind::Intrinsic(def_id) = instance.def {
         let finding = match tcx.intrinsic(def_id) {
-            Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => None,
+            Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => {
+                match codegen_fallback(tcx, instance, intrinsic) {
+                    Some(fallback) => rustc_data_structures::stack::ensure_sufficient_stack(|| {
+                        visit(tcx, fallback, tcx.def_span(def_id), visited, stack)
+                    }),
+                    None => None,
+                }
+            }
             Some(intrinsic) if ValidityRequirement::from_intrinsic(intrinsic.name).is_some() => {
                 classify_validity_assertion(tcx, instance, intrinsic, stack)
             }
@@ -224,6 +231,53 @@ fn visit<'tcx>(
 
     stack.pop();
     pending_reject
+}
+
+/// The table in ADR 0005 vouches for the backend's lowering of an intrinsic,
+/// but the backend does not always lower it: anything it has no arm for —
+/// and `typed_swap_nonoverlapping` for a non-SSA type when optimizing — is
+/// codegen'd as a call to the intrinsic's Rust fallback body
+/// (`IntrinsicResult::Fallback` in `rustc_codegen_ssa`/`rustc_codegen_llvm`),
+/// which is ordinary MIR that can call anything. Whether that happens is
+/// decided per call site inside codegen, so this asks the question rustc's
+/// own mono collector asks (`visit_instance_use`) to decide whether the
+/// fallback must be codegen'd at all: a body exists and the backend has not
+/// declared the intrinsic always-replaced. If the collector would emit it,
+/// it is walked. A backend that wrongly declared an intrinsic replaced would
+/// fail to link rather than silently call the fallback, so the declaration
+/// is safe to rely on.
+fn codegen_fallback<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    intrinsic: ty::IntrinsicDef,
+) -> Option<Instance<'tcx>> {
+    let force = tcx.sess.opts.unstable_opts.force_intrinsic_fallback;
+    let may_use_fallback = !intrinsic.must_be_overridden
+        && (force || !tcx.sess.replaced_intrinsics.contains(&intrinsic.name))
+        && (force || !swap_lowered_in_place(tcx, instance, intrinsic));
+    may_use_fallback.then(|| Instance::new_raw(instance.def_id(), instance.args))
+}
+
+/// `codegen_intrinsic_call`'s one per-instantiation choice among the
+/// table's intrinsics: `typed_swap_nonoverlapping` is swapped in place,
+/// never through its fallback, for an SSA-standalone type or when not
+/// optimizing. Mirrored so `mem::swap` in an unoptimized build is not
+/// rejected for a body codegen never calls. A layout that cannot be
+/// computed answers "no", which keeps the fallback walked.
+fn swap_lowered_in_place<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    intrinsic: ty::IntrinsicDef,
+) -> bool {
+    if intrinsic.name != rustc_span::sym::typed_swap_nonoverlapping {
+        return false;
+    }
+    if tcx.sess.opts.optimize == rustc_session::config::OptLevel::No {
+        return true;
+    }
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    tcx.layout_of(typing_env.as_query_input(instance.args.type_at(0)))
+        .is_ok_and(|layout| layout.is_ssa_standalone())
 }
 
 /// `assert_inhabited`, `assert_zero_valid` and `assert_mem_uninitialized_valid`
@@ -498,6 +552,15 @@ fn classify_terminator<'tcx>(
                 "assertion may invoke the panic handler when panic=unwind".to_string(),
             ));
         }
+        // Under immediate-abort there is no carve-out (ADR 0006): codegen
+        // lowers a failing assertion to a call to a core panic lang item,
+        // and that call is followed like any other, rather than trusted to
+        // be the bare `abort` std compiles it to in this mode.
+        TerminatorKind::Assert { msg, .. }
+            if tcx.sess.panic_strategy() == rustc_target::spec::PanicStrategy::ImmediateAbort =>
+        {
+            edges.push(assert_panic_edge(tcx, msg, term_span));
+        }
         TerminatorKind::Assert { .. } => edges.push(Edge::None),
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
@@ -514,6 +577,35 @@ fn classify_terminator<'tcx>(
     }
 
     edges
+}
+
+/// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls
+/// when an assertion fails, chosen exactly as it chooses it. Lang items are
+/// non-generic, so codegen calls their `Instance::mono`, and so does this.
+fn assert_panic_edge<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    msg: &rustc_middle::mir::AssertMessage<'tcx>,
+    span: Span,
+) -> Edge<'tcx> {
+    use rustc_hir::LangItem;
+    use rustc_middle::mir::AssertKind;
+    let lang_item = match msg {
+        AssertKind::BoundsCheck { .. } => LangItem::PanicBoundsCheck,
+        AssertKind::MisalignedPointerDereference { .. } => {
+            LangItem::PanicMisalignedPointerDereference
+        }
+        AssertKind::NullPointerDereference => LangItem::PanicNullPointerDereference,
+        AssertKind::NullReferenceConstructed => LangItem::PanicNullReferenceConstructed,
+        AssertKind::InvalidEnumConstruction(_) => LangItem::PanicInvalidEnumConstruction,
+        _ => msg.panic_function(),
+    };
+    match tcx.lang_items().get(lang_item) {
+        Some(def_id) => Edge::Resolved(Instance::mono(tcx, def_id), span),
+        None => Edge::Unresolved(format!(
+            "assertion panics through lang item `{}`, which is not defined",
+            lang_item.name()
+        )),
+    }
 }
 
 fn to_frames<'tcx>(tcx: TyCtxt<'tcx>, chain: &[(Instance<'tcx>, Span)]) -> Vec<Frame> {

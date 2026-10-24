@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended 2026-08-23, 2026-08-25, and 2026-09-03.
+Accepted, amended 2026-08-23, 2026-08-25, 2026-09-03, and 2026-10-21.
 
 ## Decision
 
@@ -21,7 +21,7 @@ explicitly. The exhaustive classification is:
 | `Call`, `TailCall` | Traverse a resolved instance; otherwise reject. A callee whose operand *type* is `FnDef` is resolved (ADR 0007); an intrinsic is classified against the table in ADR 0005 |
 | `Drop` | Traverse required drop glue; no-op drop is safe |
 | `InlineAsm` | Reject as opaque |
-| `Assert` | Out of scope (not traversed) under a non-unwinding panic strategy (`panic=abort`); reject under `panic=unwind` |
+| `Assert` | Out of scope (not traversed) under `panic=abort`; traversed into the panic lang item codegen calls under `-Cpanic=immediate-abort` (ADR 0006); reject under `panic=unwind` |
 | `Goto`, `SwitchInt`, `Return` | Safe control flow |
 | `Unreachable`, `UnwindResume`, `UnwindTerminate` | Out of scope: no MIR callee, but each lowers to a real call (the panic runtime, or a foreign unwind-support routine) that this traversal does not follow |
 | terminate-on-unwind action | Same as `UnwindTerminate`: out of scope, not a synthesized call edge |
@@ -35,7 +35,7 @@ question for a shim, whose MIR is synthesized on demand.
 | `InstanceKind` / `ShimKind` | Classification |
 |---|---|
 | `Item` | Traverse if MIR is available and the item is not foreign; otherwise reject |
-| `Intrinsic` | Classify against ADR 0005's audited intrinsic table; reject an unrecognized intrinsic |
+| `Intrinsic` | Classify against ADR 0005's audited intrinsic table, and walk its fallback body whenever codegen may call it; reject an unrecognized intrinsic |
 | `LlvmIntrinsic` | Reject — no callable MIR exists |
 | `Virtual` | Reject — the runtime-selected vtable callee is not statically known |
 | `Shim(VTable)`, `Shim(Reify)`, `Shim(FnPtr)`, `Shim(ClosureOnce)` | Traverse — the synthesized body exposes its direct or indirect call to the ordinary call-edge classifier |
@@ -76,14 +76,16 @@ while codegen actually calls the concrete destructor through the vtable's
 drop slot. The `Drop` classifier now rejects a `dyn` place before constructing
 that glue. The `drop_dyn_arena` fixture pins this behavior.
 
-The checker uses `Session::panic_strategy().unwinds()` as its sole signal for
-`Assert`, and that is true of both non-unwinding strategies. Under plain
-`panic=abort`, a failing assertion still calls `core::panicking::panic_fmt`
-and the `#[panic_handler]` — which, with `std`, formats and prints, i.e.
-allocates — before the process aborts; under `-Cpanic=immediate-abort` it
-compiles to a bare `abort()`. The checker allows both identically, which is
-deliberate: the process is aborting either way, so both are covered by the
-same terminator-shaped scope exclusion. `panic=unwind`
+Under plain `panic=abort`, a failing assertion still calls
+`core::panicking::panic_fmt` and the `#[panic_handler]` — which, with `std`,
+formats and prints, i.e. allocates — before the process aborts. The checker
+allows that `Assert` as a terminator-shaped scope exclusion. Under
+`-Cpanic=immediate-abort` there is no exclusion: codegen lowers a failing
+assertion to a call to a core panic lang item (`panic_bounds_check`,
+`panic_const_add_overflow`, ...), chosen as `codegen_assert_terminator`
+chooses it, and the traversal resolves and walks that call (amended
+2026-10-21; it was previously allowed on the assumption that the lang item
+is `abort` in that mode, which is now checked instead). `panic=unwind`
 rejects the terminator outright instead of attempting to model the panic
 runtime.
 

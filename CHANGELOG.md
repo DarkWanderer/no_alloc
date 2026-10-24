@@ -55,6 +55,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Intrinsics in the non-allocating table no longer hide their Rust fallback
+  body: when codegen may call it (an intrinsic the backend does not lower
+  itself, or `mem::swap` of a non-SSA type when optimizing), the fallback is
+  walked like any other callee (ADR 0005).
+- Under `--immediate-abort`, a failing `Assert` is walked into the panic lang
+  item codegen calls, instead of being skipped on the assumption that it
+  aborts (ADR 0003, ADR 0006).
+- `cargo clean` now receives the build's `--release`/`--profile`/
+  `--manifest-path`/`--config`, so a rerun of a non-dev-profile build no
+  longer finds its workspace units fresh and silently drops their roots.
+- A Cargo failure now marks `report.json` as failing (when nothing else
+  already does), and a previous run's `report.json` is removed before any
+  check that can abort the run.
+- The driver fails the build for a finding with no chain to anchor a span on,
+  instead of passing it silently.
 - Drop glue for `dyn Trait` is rejected instead of being mistaken for a safe
   recursive cycle; the concrete destructor is selected through a vtable and
   is not statically known.

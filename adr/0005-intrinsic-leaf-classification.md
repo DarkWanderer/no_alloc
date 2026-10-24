@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-08-25.
+Accepted 2026-08-25, amended 2026-10-21.
 
 ## Context
 
@@ -84,6 +84,27 @@ Because the table is keyed on names from a pinned nightly, a toolchain bump
 must re-check it: a renamed intrinsic silently becomes unclassified (safe:
 it rejects), while a *reused* name whose lowering changed would not be
 caught by anything here.
+
+### Fallback bodies (amended 2026-10-21)
+
+The table vouches for the backend's lowering, and the backend does not
+always lower. An intrinsic with a Rust fallback body is codegen'd as a call
+to that body whenever the backend has no arm for it, and
+`typed_swap_nonoverlapping` (`mem::swap`) is deliberately lowered that way
+for a non-SSA type when optimizing (`IntrinsicResult::Fallback` in
+`rustc_codegen_ssa`/`rustc_codegen_llvm`). The fallback is ordinary MIR,
+and before this amendment it was never walked: a root swapping a large
+array at `opt-level = 1` passed while its code called
+`ptr::swap_nonoverlapping` and the UB-check panic path inside it.
+
+The traversal now also walks the fallback body of a table intrinsic
+whenever rustc's own mono collector would emit it (`visit_instance_use`: a
+fallback exists, and the backend has not declared the intrinsic in
+`replaced_intrinsics`, unless `-Zforce-intrinsic-fallback` is set). The one
+per-instantiation choice in `codegen_intrinsic_call`,
+`typed_swap_nonoverlapping` swapping in place for an SSA-standalone type or
+at `opt-level = 0`, is mirrored so `mem::swap` is not rejected for a body
+codegen never calls. `tests/ui/intrinsic_fallback` pins both sides.
 
 ### What the table does not cover, and neither does the tool
 
