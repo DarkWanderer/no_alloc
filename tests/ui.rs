@@ -104,7 +104,7 @@ fn ui_dir() -> PathBuf {
 /// index`/`Locking N packages`/`Finished`), which vary with local registry
 /// cache state and would make the snapshot flaky for reasons that have
 /// nothing to do with this tool's own output.
-fn diagnostic_only(stderr: &str) -> String {
+fn diagnostic_only(stderr: &str, case_dir: &Path) -> String {
     const CARGO_NOISE_PREFIXES: &[&str] = &[
         "Compiling",
         "Updating",
@@ -131,7 +131,13 @@ fn diagnostic_only(stderr: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    filtered.replace(sysroot(), "<sysroot>")
+    scrub_case_dir(&filtered.replace(sysroot(), "<sysroot>"), case_dir)
+}
+
+/// Checker messages about the case's own configuration (a `.cargo/config.toml`
+/// path, say) are absolute; like the sysroot, that prefix is machine-specific.
+fn scrub_case_dir(text: &str, case_dir: &Path) -> String {
+    text.replace(&*case_dir.to_string_lossy(), "<case>")
 }
 
 /// Stand-in for whatever host triple actually built this fixture.
@@ -143,7 +149,10 @@ const HOST_PLACEHOLDER: &str = "<host>";
 
 /// Strips spans and the host-dependent target triple (see module doc) and
 /// keeps `expected.json` deterministic regardless of iteration order.
-fn normalize(mut report: Report) -> Report {
+fn normalize(mut report: Report, case_dir: &Path) -> Report {
+    for error in &mut report.selection_errors {
+        *error = scrub_case_dir(error, case_dir);
+    }
     for root in &mut report.roots {
         match &mut root.verdict {
             Verdict::Violation { chain } | Verdict::Rejected { chain, .. } => {
@@ -213,7 +222,7 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .env("CARGO_TERM_COLOR", "never")
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
-    let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr));
+    let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr), case_dir);
 
     let report_path = target_dir.join("report.json");
     // A bless run must never manufacture expectations from a checker that
@@ -252,7 +261,7 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         Report::default()
     };
     let should_succeed = report.is_success();
-    let normalized = normalize(report);
+    let normalized = normalize(report, case_dir);
 
     let expected_json_path = case_dir.join("expected.json");
     if bless {

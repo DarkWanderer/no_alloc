@@ -1,0 +1,7 @@
+{
+  "roots": [],
+  "selection_errors": [
+    "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc: Cargo config sets `build.rustc-wrapper` to \"./skip.sh\" from <case>/.cargo/config.toml; the driver must be the only program wrapping rustc, so unset it for this run"
+  ],
+  "schema_version": 2
+}

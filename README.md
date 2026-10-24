@@ -63,6 +63,14 @@ function never appears in the report at all, which is different from an
 unmatched `--root` (reported as a selection error). Pass `--all-crates` to
 instrument every crate in the build (`RUSTC_WRAPPER`) instead.
 
+Unless `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set, the checked build uses
+the `build.rustflags` / `target.<host>.rustflags` from your Cargo config, as a
+plain `cargo build` would; `target.'cfg(...)'.rustflags` is not supported and
+the run is refused (put those flags in `RUSTFLAGS`). A `rustc-wrapper` or
+`rustc-workspace-wrapper` in Cargo config (or its `CARGO_BUILD_*` environment
+form) is likewise refused, as is the `RUSTC_WRAPPER` environment variable,
+because the driver must be the only wrapper.
+
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
 written to `target/no-alloc/report.json`. Each checked root carries a versioned

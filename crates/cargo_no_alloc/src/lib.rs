@@ -431,7 +431,217 @@ fn ambient_immediate_abort_needs_build_std(
     !build_std && declares_immediate_abort(encoded, plain)
 }
 
-fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
+/// Config keys naming a program Cargo would run in front of (or instead of)
+/// the driver. Both are rejected for the same reason the environment
+/// variables are: the driver must be the only thing between Cargo and
+/// rustc, or a wrapper that short-circuits a unit (a compile cache on a hit)
+/// silently drops that unit's roots from the report.
+const WRAPPER_CONFIG_KEYS: &[&str] = &["build.rustc-wrapper", "build.rustc-workspace-wrapper"];
+
+/// What `cargo config get` said about one key. `Unset` is a successful
+/// answer; anything else Cargo did not understand is an error, never
+/// `Unset`.
+fn interpret_config_get(success: bool, stdout: &str, stderr: &str) -> Result<Option<String>> {
+    if success {
+        return Ok(Some(stdout.trim().to_owned()));
+    }
+    // Cargo has no distinct exit status for "key absent"; this message is the
+    // only signal. Matching it narrowly keeps every other failure (a
+    // malformed config file, say) fatal instead of reading as "unset" and
+    // thereby as "nothing to import / reject".
+    if stderr.contains("is not set") {
+        return Ok(None);
+    }
+    bail!("`cargo config get` failed: {}", stderr.trim());
+}
+
+/// The `--config` overrides on the build's command line. They are global
+/// Cargo options that feed the same configuration the build reads, so the
+/// config queries must see them too. `--config` before `--` only: after it
+/// the arguments belong to the test runner.
+fn config_override_args(cargo_args: &[String]) -> Vec<String> {
+    let mut overrides = Vec::new();
+    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            overrides.push(arg.clone());
+            overrides.extend(args.next().cloned());
+        } else if arg.starts_with("--config=") {
+            overrides.push(arg.clone());
+        }
+    }
+    overrides
+}
+
+fn cargo_config_get(
+    cargo: &OsString,
+    config_args: &[String],
+    key: &str,
+    extra: &[&str],
+) -> Result<Option<String>> {
+    let output = Command::new(cargo)
+        .args(config_args)
+        .args(["-Zunstable-options", "config", "get"])
+        .args(extra)
+        .arg(key)
+        .output()
+        .context("failed to spawn `cargo config get`")?;
+    interpret_config_get(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+    .with_context(|| format!("while reading Cargo config key `{key}`"))
+}
+
+/// Cargo accepts rustflags as one whitespace-split string or as an array.
+fn parse_rustflags_value(json: &str) -> Result<Vec<String>> {
+    match serde_json::from_str::<serde_json::Value>(json)
+        .context("Cargo config rustflags are not valid JSON")?
+    {
+        serde_json::Value::String(flags) => {
+            Ok(flags.split_whitespace().map(str::to_owned).collect())
+        }
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(flag) => Ok(flag),
+                other => bail!("Cargo config rustflags contain a non-string entry: {other}"),
+            })
+            .collect(),
+        other => bail!("Cargo config rustflags are neither a string nor an array: {other}"),
+    }
+}
+
+/// Names of `target.'cfg(...)'` tables that set `rustflags`. Evaluating a
+/// cfg expression is Cargo's job against its own target description; this
+/// wrapper only needs to know whether such a table exists.
+fn cfg_rustflags_tables(target_json: &str) -> Result<Vec<String>> {
+    let target: serde_json::Value =
+        serde_json::from_str(target_json).context("Cargo `target` config is not valid JSON")?;
+    let tables = target
+        .as_object()
+        .context("Cargo `target` config is not a table")?;
+    Ok(tables
+        .iter()
+        .filter(|(name, table)| {
+            name.starts_with("cfg(")
+                && table
+                    .as_object()
+                    .is_some_and(|t| t.contains_key("rustflags"))
+        })
+        .map(|(name, _)| name.clone())
+        .collect())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConfigRustflags {
+    Import(Vec<String>),
+    Unsupported(String),
+}
+
+/// Cargo's precedence among configuration sources, after the environment
+/// variables the caller did not set: `target.<triple>.rustflags` (together
+/// with matching `target.'cfg(..)'.rustflags`) wins outright, and
+/// `build.rustflags` is consulted only when no target table applies — they
+/// are never merged.
+///
+/// A `cfg(...)` table is refused rather than evaluated: guessing whether it
+/// matches would either drop flags Cargo applies or import ones it does not,
+/// and either way the report would describe a build that is not the shipped
+/// one.
+fn select_config_rustflags(
+    build: Option<Vec<String>>,
+    host_target: Option<Vec<String>>,
+    cfg_tables: &[String],
+) -> ConfigRustflags {
+    if !cfg_tables.is_empty() {
+        return ConfigRustflags::Unsupported(format!(
+            "Cargo config sets rustflags under {} which this checker cannot evaluate, so it \
+             cannot tell which flags the shipped build uses; config rustflags keyed on \
+             `cfg(...)` are not supported — put the flags in `RUSTFLAGS` instead",
+            cfg_tables
+                .iter()
+                .map(|name| format!("`target.'{name}'`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    ConfigRustflags::Import(host_target.or(build).unwrap_or_default())
+}
+
+/// The rustflags plain `cargo build --target <host>` would use when the
+/// caller set neither `RUSTFLAGS` nor `CARGO_ENCODED_RUSTFLAGS` (the
+/// environment otherwise shadows all of config, so the caller's own flags
+/// are already faithful and this is not consulted). Read through
+/// `cargo config get` so the `CARGO_BUILD_RUSTFLAGS` and
+/// `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` spellings and `--config` overrides are
+/// resolved by Cargo itself.
+fn config_rustflags(
+    cargo: &OsString,
+    config_args: &[String],
+    host: &str,
+) -> Result<ConfigRustflags> {
+    let get = |key: &str| -> Result<Option<Vec<String>>> {
+        cargo_config_get(cargo, config_args, key, &["--format", "json-value"])?
+            .map(|json| parse_rustflags_value(&json))
+            .transpose()
+            .with_context(|| format!("while reading Cargo config key `{key}`"))
+    };
+    let cfg_tables =
+        match cargo_config_get(cargo, config_args, "target", &["--format", "json-value"])? {
+            Some(json) => cfg_rustflags_tables(&json)?,
+            None => Vec::new(),
+        };
+    Ok(select_config_rustflags(
+        get("build.rustflags")?,
+        get(&format!("target.{host}.rustflags"))?,
+        &cfg_tables,
+    ))
+}
+
+/// A report that records why the run was refused, so `is_success()` is
+/// false for anyone reading the persisted file.
+fn rejected_report(mut reasons: Vec<String>) -> Report {
+    reasons.sort();
+    reasons.dedup();
+    Report {
+        selection_errors: reasons,
+        ..Report::default()
+    }
+}
+
+/// `line` is `cargo config get --show-origin` output: `key = value # origin`,
+/// where the origin is a file path or an environment variable. An unexpected
+/// shape is quoted whole rather than dropped, so the message still says where
+/// to look.
+fn wrapper_rejection(key: &str, line: &str) -> String {
+    let described = line
+        .strip_prefix(key)
+        .and_then(|rest| rest.trim_start().strip_prefix('='))
+        .and_then(|rest| rest.rsplit_once(" # "))
+        .map(|(value, origin)| format!("to {} from {origin}", value.trim()))
+        .unwrap_or_else(|| format!("({line})"));
+    format!(
+        "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with \
+         cargo-no-alloc: Cargo config sets `{key}` {described}; the driver must be the only \
+         program wrapping rustc, so unset it for this run"
+    )
+}
+
+/// Wrapper keys Cargo config (or its `CARGO_BUILD_*` environment spelling)
+/// sets. `--show-origin` is what lets the message say where it came from.
+fn configured_wrappers(cargo: &OsString, config_args: &[String]) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    for key in WRAPPER_CONFIG_KEYS {
+        if let Some(line) = cargo_config_get(cargo, config_args, key, &["--show-origin"])? {
+            found.push(wrapper_rejection(key, &line));
+        }
+    }
+    Ok(found)
+}
+
+fn add_required_rustflags(command: &mut Command, immediate_abort: bool, imported: &[String]) {
     // Two passes, and the order matters. The always-required flags are added
     // only when absent, so an inherited copy is left alone. The panic
     // strategy is then appended unconditionally, because `-Cpanic` is
@@ -445,7 +655,13 @@ fn add_required_rustflags(command: &mut Command, immediate_abort: bool) {
     } else {
         &[]
     };
-    if let Some(encoded) = env::var_os("CARGO_ENCODED_RUSTFLAGS") {
+    // Config flags are carried in the encoded variable, which has no
+    // word-splitting, so an array entry containing a space survives intact.
+    // They are only a fallback: the environment, when set, is what Cargo
+    // would have used and config would have been ignored.
+    let imported_encoded = (!imported.is_empty() && env::var_os("RUSTFLAGS").is_none())
+        .then(|| OsString::from(imported.join("\x1f")));
+    if let Some(encoded) = env::var_os("CARGO_ENCODED_RUSTFLAGS").or(imported_encoded) {
         let mut value = encoded.to_string_lossy().into_owned();
         let existing: HashSet<String> = value.split('\x1f').map(str::to_owned).collect();
         let push = |flag: &str, value: &mut String| {
@@ -643,6 +859,49 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         inv.roots.dedup();
     }
 
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let host = host_triple()?;
+    // The fragment directory exists before Cargo first sees this custom
+    // target, so create Cargo's safety tag before asking `cargo clean` to
+    // manage it on this and later runs.
+    fs::create_dir_all(&target_dir)?;
+    fs::write(target_dir.join("CACHEDIR.TAG"), CACHE_DIR_TAG)?;
+
+    // Configuration the environment-variable checks above cannot see. A
+    // run that cannot be made faithful is recorded in a persisted report
+    // (not only refused on stderr), the same way a mixed sysroot is, so a
+    // consumer reading `report.json` never finds a clean file for a build
+    // that was not checked.
+    let config_args = config_override_args(&inv.cargo_args);
+    let mut rejections = configured_wrappers(&cargo, &config_args)?;
+    let mut imported_rustflags = Vec::new();
+    // Cargo ignores config rustflags entirely once either variable is set
+    // (even to an empty value), so the caller's environment is already what
+    // plain `cargo build` would use and there is nothing to import.
+    let env_rustflags =
+        env::var("CARGO_ENCODED_RUSTFLAGS").is_ok() || env::var("RUSTFLAGS").is_ok();
+    if !env_rustflags {
+        match config_rustflags(&cargo, &config_args, &host)? {
+            ConfigRustflags::Import(flags) => {
+                if !flags.is_empty() {
+                    tracing::info!(?flags, "importing rustflags from Cargo config");
+                }
+                imported_rustflags = flags;
+            }
+            ConfigRustflags::Unsupported(reason) => rejections.push(reason),
+        }
+    }
+    if !rejections.is_empty() {
+        let report = rejected_report(rejections);
+        report
+            .write_to_file(&report_path)
+            .context("failed to write final report.json")?;
+        for error in &report.selection_errors {
+            eprintln!("error: {error}");
+        }
+        bail!("this build's configuration cannot be checked faithfully; nothing was built");
+    }
+
     // The strategy can arrive through the caller's own flags instead of the
     // checker option, and then nothing rebuilds the sysroot: the crate
     // compiles under immediate-abort while std keeps the panic runtime it
@@ -657,26 +916,25 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // check's own `mixed_sysroot_panic_strategy` already agrees is fine.
     // Gating on `inv.immediate_abort` here instead rejected that legitimate
     // combination before ever reaching the build.
+    // Imported config flags stand in for the encoded variable here: they are
+    // what rustc would see, and `-Cpanic=immediate-abort` in config is as
+    // much an ambient selection as one in the environment.
+    let ambient_encoded = env::var("CARGO_ENCODED_RUSTFLAGS")
+        .ok()
+        .or_else(|| (!imported_rustflags.is_empty()).then(|| imported_rustflags.join("\x1f")));
     ensure!(
         !ambient_immediate_abort_needs_build_std(
             inv.build_std,
-            env::var("CARGO_ENCODED_RUSTFLAGS").ok().as_deref(),
+            ambient_encoded.as_deref(),
             env::var("RUSTFLAGS").ok().as_deref(),
         ),
-        "the environment's Rust flags already select `-Cpanic=immediate-abort`, but neither \
+        "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
          `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
          report says it means if the standard library is rebuilt with it too; pass \
          `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
          strategy yourself)"
     );
 
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let host = host_triple()?;
-    // The fragment directory exists before Cargo first sees this custom
-    // target, so create Cargo's safety tag before asking `cargo clean` to
-    // manage it on this and later runs.
-    fs::create_dir_all(&target_dir)?;
-    fs::write(target_dir.join("CACHEDIR.TAG"), CACHE_DIR_TAG)?;
     clear_checker_artifacts(&cargo, &inv, &target_dir, &host)?;
     if fragment_dir.exists() {
         fs::remove_dir_all(&fragment_dir)?;
@@ -700,7 +958,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         command.arg("-Zbuild-std");
     }
     command.args(&inv.cargo_args[split..]);
-    add_required_rustflags(&mut command, inv.immediate_abort);
+    add_required_rustflags(&mut command, inv.immediate_abort, &imported_rustflags);
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
     command.env("NO_ALLOC_ROOTS", inv.roots.join(","));
     // Read back by the driver into each fragment's `Environment` (F4): these
@@ -723,10 +981,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         "LD_LIBRARY_PATH",
         combined_ld_library_path(&sysroot_lib, env::var_os("LD_LIBRARY_PATH").as_deref()),
     );
+    // The variable the checker is not using is blanked: an empty value
+    // overrides the matching config key (verified on the pinned Cargo), so
+    // a wrapper configured after the check above ran cannot slip in front of
+    // the driver.
     if inv.all_crates {
         command.env("RUSTC_WRAPPER", driver);
+        command.env("RUSTC_WORKSPACE_WRAPPER", "");
     } else {
         command.env("RUSTC_WORKSPACE_WRAPPER", driver);
+        command.env("RUSTC_WRAPPER", "");
     }
 
     let cargo_status = cargo_status(command)?;
@@ -1024,7 +1288,7 @@ mod tests {
             let previous = std::env::var_os("CARGO_ENCODED_RUSTFLAGS");
             unsafe { std::env::set_var("CARGO_ENCODED_RUSTFLAGS", encoded) };
             let mut command = Command::new("true");
-            add_required_rustflags(&mut command, true);
+            add_required_rustflags(&mut command, true, &[]);
             let value = command
                 .get_envs()
                 .find(|(name, _)| *name == "CARGO_ENCODED_RUSTFLAGS")
@@ -1265,7 +1529,7 @@ mod tests {
         }
         let flags = |immediate_abort| {
             let mut command = Command::new("true");
-            add_required_rustflags(&mut command, immediate_abort);
+            add_required_rustflags(&mut command, immediate_abort, &[]);
             command
                 .get_envs()
                 .find(|(name, _)| *name == "RUSTFLAGS" || *name == "CARGO_ENCODED_RUSTFLAGS")
@@ -1571,7 +1835,7 @@ mod tests {
         let fake_cargo = directory.join("cargo");
         std::fs::write(
             &fake_cargo,
-            "#!/bin/sh\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
+            "#!/bin/sh\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
         )?;
         for executable in [&fake_rustc, &fake_cargo] {
             let mut permissions = std::fs::metadata(executable)?.permissions();
@@ -1666,5 +1930,223 @@ mod tests {
         std::fs::remove_dir_all(directory)?;
         result?;
         failed_run
+    }
+
+    #[test]
+    fn config_rustflags_accept_a_string_or_an_array() -> Result<()> {
+        assert_eq!(
+            parse_rustflags_value(r#""--cfg heap  -Cdebuginfo=1""#)?,
+            ["--cfg", "heap", "-Cdebuginfo=1"]
+        );
+        // An array entry is one argument, spaces and all.
+        assert_eq!(
+            parse_rustflags_value(r#"["--cfg", "heap", "-Cllvm-args=a b"]"#)?,
+            ["--cfg", "heap", "-Cllvm-args=a b"]
+        );
+        assert!(parse_rustflags_value("[]")?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn config_rustflags_reject_other_shapes() {
+        assert!(parse_rustflags_value("3").is_err());
+        assert!(parse_rustflags_value(r#"["--cfg", 3]"#).is_err());
+        assert!(parse_rustflags_value("not json").is_err());
+    }
+
+    #[test]
+    fn finds_only_cfg_tables_that_set_rustflags() -> Result<()> {
+        let target = r#"{
+            "cfg(all())": {"rustflags": ["--cfg", "x"]},
+            "cfg(unix)": {"linker": "ld"},
+            "x86_64-unknown-linux-gnu": {"rustflags": ["--cfg", "y"]}
+        }"#;
+        assert_eq!(cfg_rustflags_tables(target)?, ["cfg(all())"]);
+        assert!(cfg_rustflags_tables("[]").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn target_rustflags_shadow_build_rustflags_instead_of_merging() {
+        assert_eq!(
+            select_config_rustflags(
+                Some(strings(&["--cfg", "build"])),
+                Some(strings(&["--cfg", "target"])),
+                &[]
+            ),
+            ConfigRustflags::Import(strings(&["--cfg", "target"]))
+        );
+        assert_eq!(
+            select_config_rustflags(Some(strings(&["--cfg", "build"])), None, &[]),
+            ConfigRustflags::Import(strings(&["--cfg", "build"]))
+        );
+        // A present-but-empty target table still wins, as in Cargo.
+        assert_eq!(
+            select_config_rustflags(Some(strings(&["--cfg", "build"])), Some(Vec::new()), &[]),
+            ConfigRustflags::Import(Vec::new())
+        );
+        assert_eq!(
+            select_config_rustflags(None, None, &[]),
+            ConfigRustflags::Import(Vec::new())
+        );
+    }
+
+    #[test]
+    fn cfg_keyed_rustflags_are_refused_not_guessed() {
+        let outcome = select_config_rustflags(
+            Some(strings(&["--cfg", "build"])),
+            None,
+            &["cfg(all())".to_owned()],
+        );
+        let reason = match outcome {
+            ConfigRustflags::Unsupported(reason) => reason,
+            ConfigRustflags::Import(_) => String::new(),
+        };
+        assert!(reason.contains("cfg(all())"), "{reason}");
+        assert!(reason.contains("RUSTFLAGS"), "{reason}");
+    }
+
+    #[test]
+    fn config_get_distinguishes_unset_from_failure() -> Result<()> {
+        assert_eq!(
+            interpret_config_get(true, "\"./skip.sh\"\n", "")?,
+            Some("\"./skip.sh\"".to_owned())
+        );
+        assert_eq!(
+            interpret_config_get(
+                false,
+                "",
+                "error: config value `build.rustc-wrapper` is not set\n"
+            )?,
+            None
+        );
+        // A malformed config must not read as unset.
+        let error = interpret_config_get(false, "", "error: could not parse TOML\n")
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("could not parse TOML"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn collects_config_overrides_before_the_runner_separator() {
+        let args = strings(&[
+            "--release",
+            "--config",
+            "build.rustflags=['--cfg=a']",
+            "--config=build.rustc-wrapper='w'",
+            "--",
+            "--config",
+            "ignored",
+        ]);
+        assert_eq!(
+            config_override_args(&args),
+            [
+                "--config",
+                "build.rustflags=['--cfg=a']",
+                "--config=build.rustc-wrapper='w'"
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapper_rejection_names_the_key_and_its_origin() {
+        let from_file = wrapper_rejection(
+            "build.rustc-wrapper",
+            "build.rustc-wrapper = \"./skip.sh\" # /p/.cargo/config.toml",
+        );
+        assert!(from_file.contains("`build.rustc-wrapper`"), "{from_file}");
+        assert!(from_file.contains("\"./skip.sh\""), "{from_file}");
+        assert!(from_file.contains("/p/.cargo/config.toml"), "{from_file}");
+        let from_env = wrapper_rejection(
+            "build.rustc-workspace-wrapper",
+            "build.rustc-workspace-wrapper = \"w\" # environment variable `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`",
+        );
+        assert!(
+            from_env.contains("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"),
+            "{from_env}"
+        );
+        // Same family as the environment-variable rejection.
+        assert!(from_env.contains("RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER"));
+        // An output shape this code does not know is quoted, not dropped.
+        let odd = wrapper_rejection("build.rustc-wrapper", "something unexpected");
+        assert!(odd.contains("something unexpected"), "{odd}");
+    }
+
+    #[test]
+    fn a_refused_run_leaves_a_report_that_is_not_a_success() {
+        let report = rejected_report(vec!["b".to_owned(), "a".to_owned(), "a".to_owned()]);
+        assert!(!report.is_success());
+        assert_eq!(report.selection_errors, ["a", "b"]);
+    }
+
+    #[test]
+    fn imported_config_flags_come_first_and_the_panic_strategy_stays_last() {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let saved = [
+            ("RUSTFLAGS", std::env::var_os("RUSTFLAGS")),
+            (
+                "CARGO_ENCODED_RUSTFLAGS",
+                std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
+            ),
+        ];
+        // SAFETY: guarded by `FAKE_RUSTC`, restored before returning.
+        unsafe {
+            std::env::remove_var("RUSTFLAGS");
+            std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+        }
+        let imported = strings(&["--cfg", "heap", "-Cllvm-args=a b"]);
+        let flags_for = |imported: &[String]| {
+            let mut command = Command::new("true");
+            add_required_rustflags(&mut command, true, imported);
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_ENCODED_RUSTFLAGS")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let merged = flags_for(&imported);
+        // With the user's own variable set, config is not consulted by Cargo,
+        // so imported flags must not be mixed in.
+        unsafe { std::env::set_var("RUSTFLAGS", "--cfg user") };
+        let shadowed = command_rustflags_var(&imported);
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        let parts: Vec<&str> = merged.split('\x1f').collect();
+        assert_eq!(
+            &parts[..3],
+            ["--cfg", "heap", "-Cllvm-args=a b"],
+            "{merged}"
+        );
+        assert!(parts.contains(&"--cfg=no_alloc_check"), "{merged}");
+        assert_eq!(
+            parts[parts.len() - IMMEDIATE_ABORT_RUSTFLAGS.len()..],
+            *IMMEDIATE_ABORT_RUSTFLAGS,
+            "{merged}"
+        );
+        assert!(!shadowed.contains("heap"), "{shadowed}");
+        assert!(shadowed.starts_with("--cfg user"), "{shadowed}");
+    }
+
+    /// The `RUSTFLAGS` value `add_required_rustflags` exports.
+    fn command_rustflags_var(imported: &[String]) -> String {
+        let mut command = Command::new("true");
+        add_required_rustflags(&mut command, false, imported);
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "RUSTFLAGS")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 }

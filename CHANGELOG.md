@@ -55,6 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rustflags from Cargo config (`build.rustflags`, `target.<host>.rustflags`,
+  and their `CARGO_*` environment spellings) are no longer silently dropped:
+  when `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` is unset they are imported ahead
+  of the checker's own flags, so a root guarded by `#[cfg(heap)]` is checked
+  with `--cfg heap` as shipped. `target.'cfg(...)'.rustflags` is refused with
+  a persisted `selection_errors` entry rather than guessed (ADR 0006).
+- `build.rustc-wrapper` / `build.rustc-workspace-wrapper` in Cargo config (or
+  `CARGO_BUILD_RUSTC_WRAPPER` / `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`) are
+  rejected like the `RUSTC_WRAPPER` variables; a wrapper that short-circuited
+  a unit used to drop its roots from the report with exit 0. The wrapper
+  variable the checker does not use is also blanked for the build.
+- `cargo-no-alloc` now installs a `tracing` subscriber (`NO_ALLOC_LOG`,
+  default off), used to log the imported config rustflags at info level.
 - Intrinsics in the non-allocating table no longer hide their Rust fallback
   body: when codegen may call it (an intrinsic the backend does not lower
   itself, or `mem::swap` of a non-SSA type when optimizing), the fallback is

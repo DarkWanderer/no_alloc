@@ -1,0 +1,3 @@
+# Flags keyed on `cfg(...)` cannot be evaluated by the checker, so the run is refused.
+[target.'cfg(all())']
+rustflags = ["--cfg", "heap"]

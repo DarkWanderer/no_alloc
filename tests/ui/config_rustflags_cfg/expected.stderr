@@ -1,0 +1,2 @@
+error: Cargo config sets rustflags under `target.'cfg(all())'` which this checker cannot evaluate, so it cannot tell which flags the shipped build uses; config rustflags keyed on `cfg(...)` are not supported — put the flags in `RUSTFLAGS` instead
+Error: this build's configuration cannot be checked faithfully; nothing was built
