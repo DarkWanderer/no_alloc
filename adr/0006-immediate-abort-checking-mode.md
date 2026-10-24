@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-08-25.
+Accepted 2026-08-25, amended 2026-10-24.
 
 ## Context
 
@@ -84,8 +84,9 @@ in that list — they name or filter to a target that may set
 wrapper to parse Cargo's own target metadata, which it does nowhere else.
 
 Neither pre-flight guard can see every route the strategy might take — the
-manifest, `config.toml`, or a narrow `--test`/`--bench` selection, none of
-which show up in an environment variable — so after the build,
+manifest, a `[profile.*] panic` key in `config.toml`, `--profile`, or a narrow
+`--test`/`--bench` selection, none of which show up in the rustflags — so
+after the build,
 `cargo no-alloc` also checks what the driver actually observed: any
 verdict-bearing fragment reporting `ImmediateAbort` without `--build-std` is
 rejected, since `--build-std` is what makes an otherwise hand-set strategy
@@ -107,6 +108,34 @@ trivial root with no reason to care about std's panic strategy would show a
 bare `Pass` with an `ImmediateAbort` label and nothing else — indistinguishable
 from a coherent run to a consumer that checks the JSON instead of this
 process's exit code.
+
+### Amended 2026-10-24: config rustflags
+
+The first version of this ADR said the strategy "can arrive through the
+manifest, `config.toml`, ..." and left it to the post-build check. That was
+too coarse for `config.toml` *rustflags*, and the wrapper had a worse problem
+with them: it always exported `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`, which
+Cargo prefers over `build.rustflags` and `target.<triple>.rustflags`, so a
+project's configured flags (`--cfg heap`, say) were silently dropped and the
+checked build differed from the shipped one.
+
+When the caller sets neither variable, `cargo no-alloc` now reads the
+effective `build.rustflags` / `target.<host>.rustflags` with
+`cargo config get` and exports them ahead of its own flags, using Cargo's
+precedence (a non-empty target list shadows `build`; an empty one does not, and they
+never merge). Those flags
+are also what the pre-flight guard above inspects, so
+`-Cpanic=immediate-abort` in config rustflags is now caught before the build
+rather than only after. When the caller does set a variable, Cargo would have
+ignored config, so nothing is imported. `target.'cfg(...)'.rustflags` is
+refused (recorded in `selection_errors`, no build run) rather than evaluated.
+A `build.rustc-wrapper` / `build.rustc-workspace-wrapper` in config is
+reported as a warning and neutralised for the run: the build blanks the wrapper
+variable it does not use and sets the other to the driver, and an empty
+variable disables only its own config key. The `RUSTC_WRAPPER` and
+`RUSTC_WORKSPACE_WRAPPER` environment variables are still refused.
+A strategy chosen by a manifest or config *profile* is still seen only by the
+post-build check.
 
 ## Consequences
 

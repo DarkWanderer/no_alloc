@@ -104,7 +104,7 @@ fn ui_dir() -> PathBuf {
 /// index`/`Locking N packages`/`Finished`), which vary with local registry
 /// cache state and would make the snapshot flaky for reasons that have
 /// nothing to do with this tool's own output.
-fn diagnostic_only(stderr: &str) -> String {
+fn diagnostic_only(stderr: &str, case_dir: &Path) -> String {
     const CARGO_NOISE_PREFIXES: &[&str] = &[
         "Compiling",
         "Updating",
@@ -131,7 +131,19 @@ fn diagnostic_only(stderr: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    filtered.replace(sysroot(), "<sysroot>")
+    scrub_case_dir(&filtered.replace(sysroot(), "<sysroot>"), case_dir)
+}
+
+/// Checker messages about the case's own configuration (a `.cargo/config.toml`
+/// path, say) are absolute; like the sysroot, that prefix is machine-specific.
+fn scrub_case_dir(text: &str, case_dir: &Path) -> String {
+    let scrubbed = text.replace(&*case_dir.to_string_lossy(), "<case>");
+    // Cargo's `--show-origin` prints the physical path, so a checkout reached
+    // through a symlink would otherwise leave the real path in the snapshot.
+    match case_dir.canonicalize() {
+        Ok(real) if real != case_dir => scrubbed.replace(&*real.to_string_lossy(), "<case>"),
+        _ => scrubbed,
+    }
 }
 
 /// Stand-in for whatever host triple actually built this fixture.
@@ -143,7 +155,10 @@ const HOST_PLACEHOLDER: &str = "<host>";
 
 /// Strips spans and the host-dependent target triple (see module doc) and
 /// keeps `expected.json` deterministic regardless of iteration order.
-fn normalize(mut report: Report) -> Report {
+fn normalize(mut report: Report, case_dir: &Path) -> Report {
+    for error in &mut report.selection_errors {
+        *error = scrub_case_dir(error, case_dir);
+    }
     for root in &mut report.roots {
         match &mut root.verdict {
             Verdict::Violation { chain } | Verdict::Rejected { chain, .. } => {
@@ -197,6 +212,19 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         // below strips these for the same reason.
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // The config fixtures assert on what Cargo config contributes to the
+        // build. A developer shell with sccache (`CARGO_BUILD_RUSTC_WRAPPER`)
+        // or ambient `RUSTFLAGS` would shadow or add to that and change what
+        // those fixtures exercise, so none of it may leak in.
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        // CI cache actions export `CARGO_INCREMENTAL=0`. That flips rustc's
+        // cross-crate-inlinable inference on, which changes which crate
+        // codegens an upstream non-generic function and so can change a
+        // fixture's verdict; ambient state must not decide that.
+        .env_remove("CARGO_INCREMENTAL")
         // A checker run that ends in a hard error prints anyhow's backtrace
         // when the ambient environment has RUST_BACKTRACE set — machine
         // paths, crate versions and all — which would put every fixture's
@@ -213,7 +241,7 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .env("CARGO_TERM_COLOR", "never")
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
-    let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr));
+    let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr), case_dir);
 
     let report_path = target_dir.join("report.json");
     // A bless run must never manufacture expectations from a checker that
@@ -252,7 +280,7 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         Report::default()
     };
     let should_succeed = report.is_success();
-    let normalized = normalize(report);
+    let normalized = normalize(report, case_dir);
 
     let expected_json_path = case_dir.join("expected.json");
     if bless {

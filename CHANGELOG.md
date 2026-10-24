@@ -55,10 +55,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rustflags from Cargo config (`build.rustflags`, a non-empty `target.<host>.rustflags` list,
+  and their `CARGO_*` environment spellings) are no longer silently dropped:
+  when `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` is unset they are imported ahead
+  of the checker's own flags, so a root guarded by `#[cfg(heap)]` is checked
+  with `--cfg heap` as shipped. `target.'cfg(...)'.rustflags` is refused with
+  a persisted `selection_errors` entry rather than guessed (ADR 0006).
+- `build.rustc-wrapper` / `build.rustc-workspace-wrapper` in Cargo config (or
+  `CARGO_BUILD_RUSTC_WRAPPER` / `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`) are
+  ignored for the run with a warning; a wrapper that short-circuited a unit
+  used to drop its roots from the report with exit 0. The wrapper variable the
+  checker does not use is blanked for the build, which disables the matching
+  config key. The `RUSTC_WRAPPER` variables are still refused.
+- `cargo-no-alloc` now installs a `tracing` subscriber (`NO_ALLOC_LOG`,
+  default off), used to log the imported config rustflags at info level.
 - Intrinsics in the non-allocating table no longer hide their Rust fallback
   body: when codegen may call it (an intrinsic the backend does not lower
   itself, or `mem::swap` of a non-SSA type when optimizing), the fallback is
   walked like any other callee (ADR 0005).
+- The unoptimized `mem::swap` shortcut (`typed_swap_nonoverlapping` swapped in
+  place at opt-level 0) now applies only to callers this crate codegens
+  itself. A dependency built at a higher opt-level (for example
+  `[profile.dev.package."*"] opt-level = 1`, where share-generics stays on and
+  the root reuses the dependency's instantiation) lowers the same call through its
+  fallback body, which the checker previously skipped because it read the
+  root crate's opt-level (ADR 0005). Precision cost: with share-generics at
+  opt-level 0, a linked dependency that also instantiates the same
+  `mem::swap::<T>` makes the instance upstream-shared, so a local root
+  swapping a non-SSA type is now rejected even though the dependency lowered
+  it in place (conservative, ADR 0003; pinned by
+  `shared_generic_swap_conservative`).
 - Under `--immediate-abort`, a failing `Assert` is walked into the panic lang
   item codegen calls, instead of being skipped on the assumption that it
   aborts (ADR 0003, ADR 0006).
