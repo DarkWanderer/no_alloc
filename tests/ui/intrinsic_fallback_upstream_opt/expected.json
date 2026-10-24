@@ -19,19 +19,19 @@
       }
     },
     {
-      "root": "upstream_opt_app::via_dep",
-      "instance": "via_dep",
+      "root": "upstream_opt_app::shared_swap",
+      "instance": "shared_swap",
       "verdict": {
         "kind": "rejected",
         "chain": [
           {
-            "def_path": "via_dep",
-            "instance": "via_dep",
+            "def_path": "shared_swap",
+            "instance": "shared_swap",
             "span": null
           },
           {
-            "def_path": "upstream_opt_dep::swap_big",
-            "instance": "upstream_opt_dep::swap_big",
+            "def_path": "upstream_opt_dep::swap_generic",
+            "instance": "upstream_opt_dep::swap_generic::<[u64; 16]>",
             "span": null
           },
           {
@@ -65,8 +65,8 @@
             "span": null
           },
           {
-            "def_path": "core::panicking::panic_fmt",
-            "instance": "core::panicking::panic_fmt",
+            "def_path": "std::rt::panic_fmt",
+            "instance": "std::rt::panic_fmt",
             "span": null
           }
         ],

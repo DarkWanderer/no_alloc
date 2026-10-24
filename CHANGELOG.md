@@ -76,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unoptimized `mem::swap` shortcut (`typed_swap_nonoverlapping` swapped in
   place at opt-level 0) now applies only to callers this crate codegens
   itself. A dependency built at a higher opt-level (for example
-  `[profile.dev.package."*"] opt-level = 3`) lowers the same call through its
+  `[profile.dev.package."*"] opt-level = 1`, where share-generics stays on and
+  the root reuses the dependency's instantiation) lowers the same call through its
   fallback body, which the checker previously skipped because it read the
   root crate's opt-level (ADR 0005). Precision cost: with share-generics at
   opt-level 0, a linked dependency that also instantiates the same

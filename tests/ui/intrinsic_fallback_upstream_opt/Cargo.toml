@@ -4,17 +4,17 @@ members = ["dep", "app"]
 
 [profile.dev]
 panic = "abort"
-# Explicit so the verdict does not depend on `CARGO_INCREMENTAL`.
-incremental = true
 
-# The dependency is optimized while the root crate is not, so `dep::swap_big`
-# is codegened in `dep`'s session at opt-level 3 even though the checker walks
-# its MIR from the root crate's opt-level-0 session.
+# The dependency is optimized (so it lowers `mem::swap::<[u64; 16]>` through the
+# intrinsic's fallback body) while the root crate is not (so the checker's own
+# session is opt-level 0, where a local swap is lowered in place).
 #
-# That needs `swap_big` to be codegened in `dep` and merely walked from `app`.
-# Incremental compilation disables cross-crate-inlinable inference, which keeps
-# `swap_big` an exported upstream symbol. With incremental off it would be
-# inferred cross-crate-inlinable and recompiled in `app` at opt-level 0, where
-# Pass would be the correct verdict.
+# Opt-level 1, not 3, on purpose: rustc keeps share-generics on for opt-levels
+# 0/1/s/z and turns it off for 2/3 (`Session::share_generics`). With it on,
+# `dep` exports its non-`#[inline]` `swap_generic::<[u64; 16]>` instantiation
+# and `app` reuses that upstream copy instead of codegening its own, so the
+# in-place shortcut must not apply to it. At opt-level 3 the generic would be
+# recompiled in `app`. This does not depend on cross-crate-inlinable inference
+# or on `CARGO_INCREMENTAL`.
 [profile.dev.package.upstream_opt_dep]
-opt-level = 3
+opt-level = 1

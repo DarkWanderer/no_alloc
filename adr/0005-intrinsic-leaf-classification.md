@@ -128,10 +128,16 @@ session-independent, so it is unchanged. Any other caller walks the
 fallback. `tests/ui/intrinsic_fallback_upstream_opt` pins both the upstream
 caller and the dead local root.
 
-For a non-generic dependency function, this upstream-codegened-but-walked
-condition arises under incremental compilation (the default dev profile);
-without it, cross-crate-inlinable inference makes the downstream crate codegen
-its own copy, which `should_codegen_locally` then reports as local.
+For a non-generic dependency function, whether it is codegened upstream or
+copied into the downstream crate is decided by rustc's cross-crate-inlinable
+inference, which depends on the environment (for example incremental
+compilation), so it is not a stable fixture. The deterministic case is an
+upstream-shared generic instantiation: a dependency at `opt-level = 1` keeps
+share-generics on (it is off only for 2/3), exports its non-`#[inline]`
+`swap_generic::<[u64; 16]>`, and lowers the `mem::swap` inside it through the
+fallback because it is optimizing. The root crate at opt-level 0 reuses that
+instantiation (`should_codegen_locally` is false), so the in-place shortcut
+must not apply. `tests/ui/intrinsic_fallback_upstream_opt` pins this.
 
 Known precision cost: with share-generics on at `opt-level = 0`, if any linked
 dependency built at `opt-level = 0` instantiates the same `mem::swap::<T>`,

@@ -222,9 +222,8 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         // CI cache actions export `CARGO_INCREMENTAL=0`. That flips rustc's
         // cross-crate-inlinable inference on, which changes which crate
-        // codegens an upstream function and so the verdict of fixtures like
-        // `intrinsic_fallback_upstream_opt`; fixtures pin it in their own
-        // profile instead.
+        // codegens an upstream non-generic function and so can change a
+        // fixture's verdict; ambient state must not decide that.
         .env_remove("CARGO_INCREMENTAL")
         // A checker run that ends in a hard error prints anyhow's backtrace
         // when the ambient environment has RUST_BACKTRACE set — machine

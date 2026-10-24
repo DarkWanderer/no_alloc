@@ -1,23 +1,23 @@
 error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
-    --> app/src/lib.rs:2:1
+    --> app/src/lib.rs:10:1
      |
-   2 | pub fn via_dep(a: &mut [u64; 16], b: &mut [u64; 16]) {
-     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  10 | pub fn shared_swap(a: &mut [u64; 16], b: &mut [u64; 16]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
-note: via `via_dep`
-    --> app/src/lib.rs:2:1
+note: via `shared_swap`
+    --> app/src/lib.rs:10:1
      |
-   2 | pub fn via_dep(a: &mut [u64; 16], b: &mut [u64; 16]) {
-     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: via `upstream_opt_dep::swap_big`
-    --> app/src/lib.rs:3:5
+  10 | pub fn shared_swap(a: &mut [u64; 16], b: &mut [u64; 16]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `upstream_opt_dep::swap_generic::<[u64; 16]>`
+    --> app/src/lib.rs:11:5
      |
-   3 |     upstream_opt_dep::swap_big(a, b)
-     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  11 |     upstream_opt_dep::swap_generic(a, b)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::mem::swap::<[u64; 16]>`
-    --> dep/src/lib.rs:2:5
+    --> dep/src/lib.rs:5:5
      |
-   2 |     core::mem::swap(a, b)
+   5 |     core::mem::swap(a, b)
      |     ^^^^^^^^^^^^^^^^^^^^^
 note: via `std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]> - intrinsic`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/mem/mod.rs:831:14
@@ -54,7 +54,7 @@ note: via `std::ptr::const_ptr::<impl *const ()>::is_aligned_to`
      |
  141 |             ptr.is_aligned_to(align)
      |             ^^^^^^^^^^^^^^^^^^^^^^^^
-note: via `core::panicking::panic_fmt`
+note: via `std::rt::panic_fmt`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/panic.rs:62:9
      |
   62 |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
