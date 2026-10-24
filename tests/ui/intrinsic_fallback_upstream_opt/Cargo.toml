@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["dep", "app"]
+
+[profile.dev]
+panic = "abort"
+
+# The dependency is optimized while the root crate is not, so `dep::swap_big`
+# is codegened in `dep`'s session at opt-level 3 even though the checker walks
+# its MIR from the root crate's opt-level-0 session.
+[profile.dev.package.upstream_opt_dep]
+opt-level = 3

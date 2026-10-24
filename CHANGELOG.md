@@ -72,6 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body: when codegen may call it (an intrinsic the backend does not lower
   itself, or `mem::swap` of a non-SSA type when optimizing), the fallback is
   walked like any other callee (ADR 0005).
+- The unoptimized `mem::swap` shortcut (`typed_swap_nonoverlapping` swapped in
+  place at opt-level 0) now applies only to callers this crate codegens
+  itself. A dependency built at a higher opt-level (for example
+  `[profile.dev.package."*"] opt-level = 3`) lowers the same call through its
+  fallback body, which the checker previously skipped because it read the
+  root crate's opt-level (ADR 0005).
 - Under `--immediate-abort`, a failing `Assert` is walked into the panic lang
   item codegen calls, instead of being skipped on the assumption that it
   aborts (ADR 0003, ADR 0006).

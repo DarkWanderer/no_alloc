@@ -67,8 +67,9 @@ pub struct Checked<'tcx> {
 pub fn check_instance<'tcx>(tcx: TyCtxt<'tcx>, root: Instance<'tcx>) -> Checked<'tcx> {
     let mut visited = HashSet::new();
     let mut stack = Vec::new();
+    let root_local = tcx.should_codegen_locally(root);
     let root_span = tcx.def_span(root.def_id());
-    match visit(tcx, root, root_span, &mut visited, &mut stack) {
+    match visit(tcx, root, root_local, root_span, &mut visited, &mut stack) {
         None => Checked {
             verdict: Verdict::Pass,
             chain_spans: Vec::new(),
@@ -118,11 +119,12 @@ enum Edge<'tcx> {
 fn visit<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
+    local: bool,
     entry_span: Span,
-    visited: &mut HashSet<Instance<'tcx>>,
+    visited: &mut HashSet<(Instance<'tcx>, bool)>,
     stack: &mut Vec<(Instance<'tcx>, Span)>,
 ) -> Option<Finding<'tcx>> {
-    if !visited.insert(instance) {
+    if !visited.insert((instance, local)) {
         return None;
     }
     stack.push((instance, entry_span));
@@ -146,9 +148,19 @@ fn visit<'tcx>(
     if let InstanceKind::Intrinsic(def_id) = instance.def {
         let finding = match tcx.intrinsic(def_id) {
             Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => {
-                match codegen_fallback(tcx, instance, intrinsic) {
+                // An intrinsic has no body of its own; `local` was passed
+                // down unchanged from the body whose MIR contains the call.
+                match codegen_fallback(tcx, local, instance, intrinsic) {
                     Some(fallback) => rustc_data_structures::stack::ensure_sufficient_stack(|| {
-                        visit(tcx, fallback, tcx.def_span(def_id), visited, stack)
+                        let fallback_local = local && tcx.should_codegen_locally(fallback);
+                        visit(
+                            tcx,
+                            fallback,
+                            fallback_local,
+                            tcx.def_span(def_id),
+                            visited,
+                            stack,
+                        )
                     }),
                     None => None,
                 }
@@ -207,8 +219,14 @@ fn visit<'tcx>(
                 // stack segment before that happens rather than SIGSEGVing
                 // the driver.
                 Edge::Resolved(callee, span) => {
+                    // Mirrors the collector: a callee is codegened here only
+                    // if its caller is and `should_codegen_locally` agrees.
+                    // An intrinsic is a lowering inside the caller's body.
+                    let callee_local = local
+                        && (matches!(callee.def, InstanceKind::Intrinsic(_))
+                            || tcx.should_codegen_locally(callee));
                     match rustc_data_structures::stack::ensure_sufficient_stack(|| {
-                        visit(tcx, callee, span, visited, stack)
+                        visit(tcx, callee, callee_local, span, visited, stack)
                     }) {
                         Some(Finding::Violation(chain)) => {
                             stack.pop();
@@ -246,15 +264,31 @@ fn visit<'tcx>(
 /// it is walked. A backend that wrongly declared an intrinsic replaced would
 /// fail to link rather than silently call the fallback, so the declaration
 /// is safe to rely on.
+///
+/// Other session reads in this traversal, and why they are not subject to
+/// the per-caller concern `swap_lowered_in_place` handles:
+/// - `panic_strategy` and `replaced_intrinsics`: one value per build graph.
+///   rustc refuses to link crates with incompatible panic strategies, and
+///   the replaced-intrinsics set is a property of the codegen backend, not
+///   of a package profile.
+/// - `force_intrinsic_fallback` and `check_validity_requirement`'s
+///   `strict_init_checks` are `-Z` flags. rustc does not enforce that they
+///   agree across crates (they are only tracked for incremental hashing),
+///   but they travel in `RUSTFLAGS`, which `cargo-no-alloc` sets for the
+///   whole build, so they are uniform in practice here. A build that set
+///   them for only some packages would not be modelled.
+///
+/// Opt-level, by contrast, is set per package by cargo profile overrides.
 fn codegen_fallback<'tcx>(
     tcx: TyCtxt<'tcx>,
+    caller_local: bool,
     instance: Instance<'tcx>,
     intrinsic: ty::IntrinsicDef,
 ) -> Option<Instance<'tcx>> {
     let force = tcx.sess.opts.unstable_opts.force_intrinsic_fallback;
     let may_use_fallback = !intrinsic.must_be_overridden
         && (force || !tcx.sess.replaced_intrinsics.contains(&intrinsic.name))
-        && (force || !swap_lowered_in_place(tcx, instance, intrinsic));
+        && (force || !swap_lowered_in_place(tcx, caller_local, instance, intrinsic));
     may_use_fallback.then(|| Instance::new_raw(instance.def_id(), instance.args))
 }
 
@@ -264,20 +298,38 @@ fn codegen_fallback<'tcx>(
 /// optimizing. Mirrored so `mem::swap` in an unoptimized build is not
 /// rejected for a body codegen never calls. A layout that cannot be
 /// computed answers "no", which keeps the fallback walked.
+///
+/// **Whose session decides.** The lowering is chosen while codegening the
+/// *caller's* body, in the session of the crate that codegens that body. The
+/// layout test is session-independent, so it holds wherever the call is
+/// codegened. The opt-level test is not: it is per package profile, and this
+/// driver only runs in one crate's session. A non-generic function in a
+/// dependency built at `opt-level = 3` can have its MIR walked here at
+/// opt-level 0 while its object code took the fallback path. So the
+/// `OptLevel::No` shortcut applies only when the caller is codegened in this
+/// crate (`caller_local`). That is rustc's own `should_codegen_locally`
+/// decision, applied the way the collector applies it along the walk: a root
+/// is local if it is a local definition (reachable or not), and a callee is
+/// local only if its caller is and `should_codegen_locally` holds for it,
+/// which is false for an upstream non-generic and for an upstream-shared
+/// instantiation. The query alone is not enough: an `#[inline]` generic such
+/// as `mem::swap::<T>` is local by that test, yet is only emitted in the
+/// crate that reaches it, which for a dependency's body is the dependency.
+/// Any other caller walks the fallback, which is the conservative direction
+/// (ADR 0003, ADR 0005).
 fn swap_lowered_in_place<'tcx>(
     tcx: TyCtxt<'tcx>,
+    caller_local: bool,
     instance: Instance<'tcx>,
     intrinsic: ty::IntrinsicDef,
 ) -> bool {
     if intrinsic.name != rustc_span::sym::typed_swap_nonoverlapping {
         return false;
     }
-    if tcx.sess.opts.optimize == rustc_session::config::OptLevel::No {
-        return true;
-    }
     let typing_env = ty::TypingEnv::fully_monomorphized();
     tcx.layout_of(typing_env.as_query_input(instance.args.type_at(0)))
         .is_ok_and(|layout| layout.is_ssa_standalone())
+        || (caller_local && tcx.sess.opts.optimize == rustc_session::config::OptLevel::No)
 }
 
 /// `assert_inhabited`, `assert_zero_valid` and `assert_mem_uninitialized_valid`
