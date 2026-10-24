@@ -122,12 +122,18 @@ checked build differed from the shipped one.
 When the caller sets neither variable, `cargo no-alloc` now reads the
 effective `build.rustflags` / `target.<host>.rustflags` with
 `cargo config get` and exports them ahead of its own flags, using Cargo's
-precedence (a target table shadows `build`; they do not merge). Those flags
+precedence (a non-empty target list shadows `build`; an empty one does not, and they
+never merge). Those flags
 are also what the pre-flight guard above inspects, so
 `-Cpanic=immediate-abort` in config rustflags is now caught before the build
 rather than only after. When the caller does set a variable, Cargo would have
 ignored config, so nothing is imported. `target.'cfg(...)'.rustflags` is
 refused (recorded in `selection_errors`, no build run) rather than evaluated.
+A `build.rustc-wrapper` / `build.rustc-workspace-wrapper` in config is
+reported as a warning and neutralised for the run: the build blanks the wrapper
+variable it does not use and sets the other to the driver, and an empty
+variable disables only its own config key. The `RUSTC_WRAPPER` and
+`RUSTC_WORKSPACE_WRAPPER` environment variables are still refused.
 A strategy chosen by a manifest or config *profile* is still seen only by the
 post-build check.
 

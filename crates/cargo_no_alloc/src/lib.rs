@@ -432,10 +432,13 @@ fn ambient_immediate_abort_needs_build_std(
 }
 
 /// Config keys naming a program Cargo would run in front of (or instead of)
-/// the driver. Both are rejected for the same reason the environment
-/// variables are: the driver must be the only thing between Cargo and
-/// rustc, or a wrapper that short-circuits a unit (a compile cache on a hit)
-/// silently drops that unit's roots from the report.
+/// the driver. The driver must be the only thing between Cargo and rustc, or
+/// a wrapper that short-circuits a unit (a compile cache on a hit) silently
+/// drops that unit's roots from the report. Unlike the environment
+/// variables, these are warned about and neutralised rather than refused:
+/// the build blanks both wrapper variables (an empty value disables only its
+/// own config key), so a configured wrapper (sccache in `~/.cargo/config.toml`)
+/// cannot take effect and refusing would only block users for nothing.
 const WRAPPER_CONFIG_KEYS: &[&str] = &["build.rustc-wrapper", "build.rustc-workspace-wrapper"];
 
 /// What `cargo config get` said about one key. `Unset` is a successful
@@ -541,10 +544,10 @@ enum ConfigRustflags {
 }
 
 /// Cargo's precedence among configuration sources, after the environment
-/// variables the caller did not set: `target.<triple>.rustflags` (together
-/// with matching `target.'cfg(..)'.rustflags`) wins outright, and
-/// `build.rustflags` is consulted only when no target table applies — they
-/// are never merged.
+/// variables the caller did not set: a non-empty `target.<triple>.rustflags`
+/// (together with matching `target.'cfg(..)'.rustflags`) wins outright, and
+/// `build.rustflags` is consulted when the target list is absent or empty —
+/// they are never merged. An empty target list does not shadow `build`.
 ///
 /// A `cfg(...)` table is refused rather than evaluated: guessing whether it
 /// matches would either drop flags Cargo applies or import ones it does not,
@@ -567,7 +570,11 @@ fn select_config_rustflags(
                 .join(", ")
         ));
     }
-    ConfigRustflags::Import(host_target.or(build).unwrap_or_default())
+    // Cargo falls back to `build.rustflags` when the target list is empty
+    // (checked with `cargo build -v --target <host>`), so only a non-empty
+    // list shadows it; `.or` would let `rustflags = []` hide real flags.
+    let target = host_target.filter(|flags| !flags.is_empty());
+    ConfigRustflags::Import(target.or(build).unwrap_or_default())
 }
 
 /// The rustflags plain `cargo build --target <host>` would use when the
@@ -615,27 +622,27 @@ fn rejected_report(mut reasons: Vec<String>) -> Report {
 /// where the origin is a file path or an environment variable. An unexpected
 /// shape is quoted whole rather than dropped, so the message still says where
 /// to look.
-fn wrapper_rejection(key: &str, line: &str) -> String {
+fn wrapper_warning(key: &str, line: &str) -> String {
     let described = line
         .strip_prefix(key)
         .and_then(|rest| rest.trim_start().strip_prefix('='))
         .and_then(|rest| rest.rsplit_once(" # "))
-        .map(|(value, origin)| format!("to {} from {origin}", value.trim()))
+        .map(|(value, origin)| format!("set to {} from {origin}", value.trim()))
         .unwrap_or_else(|| format!("({line})"));
     format!(
-        "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with \
-         cargo-no-alloc: Cargo config sets `{key}` {described}; the driver must be the only \
-         program wrapping rustc, so unset it for this run"
+        "ignoring `{key}` {described} for this run: the driver must be the only program \
+         wrapping rustc"
     )
 }
 
-/// Wrapper keys Cargo config (or its `CARGO_BUILD_*` environment spelling)
-/// sets. `--show-origin` is what lets the message say where it came from.
+/// Warnings for wrapper keys Cargo config (or its `CARGO_BUILD_*` environment
+/// spelling) sets. `--show-origin` is what lets the message say where it came
+/// from.
 fn configured_wrappers(cargo: &OsString, config_args: &[String]) -> Result<Vec<String>> {
     let mut found = Vec::new();
     for key in WRAPPER_CONFIG_KEYS {
         if let Some(line) = cargo_config_get(cargo, config_args, key, &["--show-origin"])? {
-            found.push(wrapper_rejection(key, &line));
+            found.push(wrapper_warning(key, &line));
         }
     }
     Ok(found)
@@ -873,7 +880,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // consumer reading `report.json` never finds a clean file for a build
     // that was not checked.
     let config_args = config_override_args(&inv.cargo_args);
-    let mut rejections = configured_wrappers(&cargo, &config_args)?;
+    // Neutralised below by blanking the wrapper variables, so only a warning.
+    for warning in configured_wrappers(&cargo, &config_args)? {
+        eprintln!("warning: {warning}");
+    }
+    let mut rejections = Vec::new();
     let mut imported_rustflags = Vec::new();
     // Cargo ignores config rustflags entirely once either variable is set
     // (even to an empty value), so the caller's environment is already what
@@ -1967,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn target_rustflags_shadow_build_rustflags_instead_of_merging() {
+    fn non_empty_target_rustflags_shadow_build_rustflags_instead_of_merging() {
         assert_eq!(
             select_config_rustflags(
                 Some(strings(&["--cfg", "build"])),
@@ -1980,10 +1991,10 @@ mod tests {
             select_config_rustflags(Some(strings(&["--cfg", "build"])), None, &[]),
             ConfigRustflags::Import(strings(&["--cfg", "build"]))
         );
-        // A present-but-empty target table still wins, as in Cargo.
+        // An empty target list does not shadow `build`, as in Cargo.
         assert_eq!(
             select_config_rustflags(Some(strings(&["--cfg", "build"])), Some(Vec::new()), &[]),
-            ConfigRustflags::Import(Vec::new())
+            ConfigRustflags::Import(strings(&["--cfg", "build"]))
         );
         assert_eq!(
             select_config_rustflags(None, None, &[]),
@@ -2051,15 +2062,19 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_rejection_names_the_key_and_its_origin() {
-        let from_file = wrapper_rejection(
+    fn wrapper_warning_names_the_key_and_its_origin() {
+        let from_file = wrapper_warning(
             "build.rustc-wrapper",
             "build.rustc-wrapper = \"./skip.sh\" # /p/.cargo/config.toml",
         );
-        assert!(from_file.contains("`build.rustc-wrapper`"), "{from_file}");
+        assert!(from_file.starts_with("ignoring `build.rustc-wrapper` set to"));
         assert!(from_file.contains("\"./skip.sh\""), "{from_file}");
-        assert!(from_file.contains("/p/.cargo/config.toml"), "{from_file}");
-        let from_env = wrapper_rejection(
+        assert!(
+            from_file.contains("from /p/.cargo/config.toml"),
+            "{from_file}"
+        );
+        assert!(from_file.contains("for this run"), "{from_file}");
+        let from_env = wrapper_warning(
             "build.rustc-workspace-wrapper",
             "build.rustc-workspace-wrapper = \"w\" # environment variable `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER`",
         );
@@ -2067,10 +2082,8 @@ mod tests {
             from_env.contains("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"),
             "{from_env}"
         );
-        // Same family as the environment-variable rejection.
-        assert!(from_env.contains("RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER"));
         // An output shape this code does not know is quoted, not dropped.
-        let odd = wrapper_rejection("build.rustc-wrapper", "something unexpected");
+        let odd = wrapper_warning("build.rustc-wrapper", "something unexpected");
         assert!(odd.contains("something unexpected"), "{odd}");
     }
 

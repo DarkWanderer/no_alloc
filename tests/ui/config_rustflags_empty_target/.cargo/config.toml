@@ -1,0 +1,11 @@
+[build]
+rustflags = ["--cfg", "heap"]
+
+# Present but empty: Cargo ignores an empty target list and still applies
+# `build.rustflags`. Both common host triples are listed because the host is
+# runner-dependent; a table for a non-matching triple is ignored by Cargo.
+[target.x86_64-unknown-linux-gnu]
+rustflags = []
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = []

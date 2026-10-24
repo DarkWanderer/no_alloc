@@ -1,0 +1,11 @@
+[package]
+name = "shared_swap_app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shared_swap_dep = { path = "../dep" }
+no_alloc_check = { path = "../../../../crates/no_alloc_check" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

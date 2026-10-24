@@ -68,8 +68,9 @@ the `build.rustflags` / `target.<host>.rustflags` from your Cargo config, as a
 plain `cargo build` would; `target.'cfg(...)'.rustflags` is not supported and
 the run is refused (put those flags in `RUSTFLAGS`). A `rustc-wrapper` or
 `rustc-workspace-wrapper` in Cargo config (or its `CARGO_BUILD_*` environment
-form) is likewise refused, as is the `RUSTC_WRAPPER` environment variable,
-because the driver must be the only wrapper.
+form) is ignored for the run with a warning, because the driver must be the
+only wrapper; the `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` environment
+variables are refused.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
@@ -114,6 +115,11 @@ actually taken at runtime — the DFS reports whichever call sequence it finds
 first among several that may exist; this is correct for a reachability
 claim, but don't read the chain as "this is the line that allocates" without
 checking.
+
+A `mem::swap` of a non-SSA type in a local root can be rejected when a linked
+dependency built at the same opt-level instantiates the same `mem::swap::<T>`
+(share-generics makes it upstream-shared); this is a conservative false
+rejection ([ADR 0005](adr/0005-intrinsic-leaf-classification.md)).
 
 **The panic exclusion is drawn by terminator shape, not by whether a path
 panics.**

@@ -1,2 +1,38 @@
-error: existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc: Cargo config sets `build.rustc-wrapper` to "./skip.sh" from <case>/.cargo/config.toml; the driver must be the only program wrapping rustc, so unset it for this run
-Error: this build's configuration cannot be checked faithfully; nothing was built
+warning: ignoring `build.rustc-wrapper` set to "./skip.sh" from <case>/.cargo/config.toml for this run: the driver must be the only program wrapping rustc
+error: no_alloc: this function may reach the global allocator
+   --> src/main.rs:3:1
+    |
+  3 | fn root(x: u8) -> u8 {
+    | ^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `root`
+   --> src/main.rs:3:1
+    |
+  3 | fn root(x: u8) -> u8 {
+    | ^^^^^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<u8>::new`
+   --> src/main.rs:4:6
+    |
+  4 |     *Box::new(x)
+    |      ^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `config_rustc_wrapper` (bin "config_rustc_wrapper") due to 1 previous error

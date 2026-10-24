@@ -116,9 +116,10 @@ session, so reading its opt-level for a body codegened in a dependency
 code whose object code calls the fallback. The rule is now per caller: the
 `OptLevel::No` shortcut applies only if the caller is codegened in this
 crate. That is rustc's own `should_codegen_locally`, applied along the walk
-the way the collector applies it: a root is local if it is a local definition
-(reachable or not, so a private never-called root is still judged at this
-crate's opt-level); a callee is local only if its caller is and
+the way the collector applies it: a root is local if rustc would codegen it in this crate
+(`should_codegen_locally`), which includes every local definition (reachable
+or not, so a private never-called root is still judged at this crate's
+opt-level); a callee is local only if its caller is and
 `should_codegen_locally(callee)` holds, which is false for an upstream
 non-generic and for an upstream-shared generic instantiation. The query alone
 is not enough, since an `#[inline]` generic like `mem::swap::<T>` passes it
@@ -126,6 +127,15 @@ yet is emitted only where it is reached. The SSA-standalone test is layout-based
 session-independent, so it is unchanged. Any other caller walks the
 fallback. `tests/ui/intrinsic_fallback_upstream_opt` pins both the upstream
 caller and the dead local root.
+
+Known precision cost: with share-generics on at `opt-level = 0`, if any linked
+dependency built at `opt-level = 0` instantiates the same `mem::swap::<T>`,
+`should_codegen_locally` reports the instance as upstream-shared, the callee
+becomes non-local, and the fallback is walked. A local root doing `mem::swap`
+on a non-SSA type is then Rejected even though the exporting crate lowered it
+in place. This is conservative and acceptable under ADR 0003;
+`tests/ui/shared_generic_swap_conservative` pins it as a known false
+rejection, not as desired behaviour.
 
 ### What the table does not cover, and neither does the tool
 

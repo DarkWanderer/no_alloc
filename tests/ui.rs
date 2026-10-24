@@ -137,7 +137,13 @@ fn diagnostic_only(stderr: &str, case_dir: &Path) -> String {
 /// Checker messages about the case's own configuration (a `.cargo/config.toml`
 /// path, say) are absolute; like the sysroot, that prefix is machine-specific.
 fn scrub_case_dir(text: &str, case_dir: &Path) -> String {
-    text.replace(&*case_dir.to_string_lossy(), "<case>")
+    let scrubbed = text.replace(&*case_dir.to_string_lossy(), "<case>");
+    // Cargo's `--show-origin` prints the physical path, so a checkout reached
+    // through a symlink would otherwise leave the real path in the snapshot.
+    match case_dir.canonicalize() {
+        Ok(real) if real != case_dir => scrubbed.replace(&*real.to_string_lossy(), "<case>"),
+        _ => scrubbed,
+    }
 }
 
 /// Stand-in for whatever host triple actually built this fixture.
@@ -206,6 +212,14 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         // below strips these for the same reason.
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // The config fixtures assert on what Cargo config contributes to the
+        // build. A developer shell with sccache (`CARGO_BUILD_RUSTC_WRAPPER`)
+        // or ambient `RUSTFLAGS` would shadow or add to that and change what
+        // those fixtures exercise, so none of it may leak in.
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         // A checker run that ends in a hard error prints anyhow's backtrace
         // when the ambient environment has RUST_BACKTRACE set — machine
         // paths, crate versions and all — which would put every fixture's
