@@ -106,6 +106,27 @@ per-instantiation choice in `codegen_intrinsic_call`,
 at `opt-level = 0`, is mirrored so `mem::swap` is not rejected for a body
 codegen never calls. `tests/ui/intrinsic_fallback` pins both sides.
 
+### Whose session decides the swap lowering (amended 2026-10-24)
+
+`typed_swap_nonoverlapping` is lowered in place at `opt-level = 0`, but
+"opt-level" is the session of the crate that codegens the *caller*, and
+opt-level is set per package profile. The checker runs in one crate's
+session, so reading its opt-level for a body codegened in a dependency
+(non-generic, MIR available cross-crate, built at a higher opt-level) passed
+code whose object code calls the fallback. The rule is now per caller: the
+`OptLevel::No` shortcut applies only if the caller is codegened in this
+crate. That is rustc's own `should_codegen_locally`, applied along the walk
+the way the collector applies it: a root is local if it is a local definition
+(reachable or not, so a private never-called root is still judged at this
+crate's opt-level); a callee is local only if its caller is and
+`should_codegen_locally(callee)` holds, which is false for an upstream
+non-generic and for an upstream-shared generic instantiation. The query alone
+is not enough, since an `#[inline]` generic like `mem::swap::<T>` passes it
+yet is emitted only where it is reached. The SSA-standalone test is layout-based and
+session-independent, so it is unchanged. Any other caller walks the
+fallback. `tests/ui/intrinsic_fallback_upstream_opt` pins both the upstream
+caller and the dead local root.
+
 ### What the table does not cover, and neither does the tool
 
 Some of these lowerings emit a call to a *named* symbol — `powf` for
