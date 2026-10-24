@@ -128,6 +128,11 @@ session-independent, so it is unchanged. Any other caller walks the
 fallback. `tests/ui/intrinsic_fallback_upstream_opt` pins both the upstream
 caller and the dead local root.
 
+For a non-generic dependency function, this upstream-codegened-but-walked
+condition arises under incremental compilation (the default dev profile);
+without it, cross-crate-inlinable inference makes the downstream crate codegen
+its own copy, which `should_codegen_locally` then reports as local.
+
 Known precision cost: with share-generics on at `opt-level = 0`, if any linked
 dependency built at `opt-level = 0` instantiates the same `mem::swap::<T>`,
 `should_codegen_locally` reports the instance as upstream-shared, the callee

@@ -4,9 +4,17 @@ members = ["dep", "app"]
 
 [profile.dev]
 panic = "abort"
+# Explicit so the verdict does not depend on `CARGO_INCREMENTAL`.
+incremental = true
 
 # The dependency is optimized while the root crate is not, so `dep::swap_big`
 # is codegened in `dep`'s session at opt-level 3 even though the checker walks
 # its MIR from the root crate's opt-level-0 session.
+#
+# That needs `swap_big` to be codegened in `dep` and merely walked from `app`.
+# Incremental compilation disables cross-crate-inlinable inference, which keeps
+# `swap_big` an exported upstream symbol. With incremental off it would be
+# inferred cross-crate-inlinable and recompiled in `app` at opt-level 0, where
+# Pass would be the correct verdict.
 [profile.dev.package.upstream_opt_dep]
 opt-level = 3
