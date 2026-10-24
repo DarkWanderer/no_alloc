@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["dep", "app"]
+
+[profile.dev]
+panic = "abort"
+
+# The dependency is optimized (so it lowers `mem::swap::<[u64; 16]>` through the
+# intrinsic's fallback body) while the root crate is not (so the checker's own
+# session is opt-level 0, where a local swap is lowered in place).
+#
+# Opt-level 1, not 3, on purpose: rustc keeps share-generics on for opt-levels
+# 0/1/s/z and turns it off for 2/3 (`Session::share_generics`). With it on,
+# `dep` exports its non-`#[inline]` `swap_generic::<[u64; 16]>` instantiation
+# and `app` reuses that upstream copy instead of codegening its own, so the
+# in-place shortcut must not apply to it. At opt-level 3 the generic would be
+# recompiled in `app`. This does not depend on cross-crate-inlinable inference
+# or on `CARGO_INCREMENTAL`.
+[profile.dev.package.upstream_opt_dep]
+opt-level = 1

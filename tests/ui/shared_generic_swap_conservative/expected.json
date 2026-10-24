@@ -1,0 +1,67 @@
+{
+  "roots": [
+    {
+      "root": "shared_swap_app::local_swap",
+      "instance": "local_swap",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "local_swap",
+            "instance": "local_swap",
+            "span": null
+          },
+          {
+            "def_path": "std::mem::swap",
+            "instance": "std::mem::swap::<[u64; 16]>",
+            "span": null
+          },
+          {
+            "def_path": "std::intrinsics::typed_swap_nonoverlapping",
+            "instance": "std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]> - intrinsic",
+            "span": null
+          },
+          {
+            "def_path": "std::intrinsics::typed_swap_nonoverlapping",
+            "instance": "std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]>",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::swap_nonoverlapping",
+            "instance": "std::ptr::swap_nonoverlapping::<[u64; 16]>",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::swap_nonoverlapping::precondition_check",
+            "instance": "std::ptr::swap_nonoverlapping::precondition_check",
+            "span": null
+          },
+          {
+            "def_path": "std::ptr::const_ptr::<impl *const T>::is_aligned_to",
+            "instance": "std::ptr::const_ptr::<impl *const ()>::is_aligned_to",
+            "span": null
+          },
+          {
+            "def_path": "core::panicking::panic_fmt",
+            "instance": "core::panicking::panic_fmt",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      },
+      "environment": {
+        "panic_strategy": "abort",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "abort",
+  "schema_version": 2
+}
