@@ -1,20 +1,4 @@
 {
-  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
-  extends: [
-    'config:best-practices',
-    ':semanticCommits',
-    'schedule:weekly',
-    'helpers:pinGitHubActionDigestsToSemver',
-  ],
-  rebaseWhen: 'conflicted',
-  vulnerabilityAlerts: {
-    enabled: true,
-    schedule: [],
-  },
-  packageRules: [
-    {
-      matchManagers: ['cargo'],
-      rangeStrategy: 'replace',
-    },
-  ],
+  extends: ['github>voron-software/.github:renovate.json5'],
+  bumpVersion: 'patch',
 }
