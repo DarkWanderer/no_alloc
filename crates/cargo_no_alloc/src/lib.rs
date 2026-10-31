@@ -2171,11 +2171,40 @@ mod tests {
         assert_eq!(report.selection_errors, vec!["already failing".to_owned()]);
     }
 
+    /// `NAME=value` lines as printed by `env`, split at the first `=`.
+    fn parse_env_log(log: &str) -> std::collections::BTreeMap<String, String> {
+        log.lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect()
+    }
+
+    /// The names `REQUIRED_RUSTFLAGS` and the driver's own list must agree
+    /// on: the driver re-adds any that are missing, so a flag in only one of
+    /// them makes direct driver use build a different program.
+    #[test]
+    fn required_rustflags_match_the_drivers_list() -> Result<()> {
+        let source = include_str!("bin/no-alloc-driver.rs");
+        let start = source
+            .find("const REQUIRED_FLAGS")
+            .context("driver has no REQUIRED_FLAGS")?;
+        let list = &source[start..];
+        let list = &list[..list.find("];").context("unterminated REQUIRED_FLAGS")?];
+        let driver: Vec<&str> = list
+            .lines()
+            .skip(1)
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .filter_map(|line| line.split('"').nth(1))
+            .collect();
+        assert_eq!(driver, REQUIRED_RUSTFLAGS);
+        Ok(())
+    }
+
     #[test]
     fn orchestration_runs_with_fake_cargo_and_rustc() -> Result<()> {
         // Also writes executables and runs them, so it shares the lock (see
-        // `FAKE_RUSTC`) as well as being the only test that mutates the
-        // process environment.
+        // `FAKE_RUSTC`). Other tests mutate the process environment too, but
+        // only under that same lock, so none can observe this one's values.
         let _guard = FAKE_RUSTC
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2194,9 +2223,24 @@ mod tests {
             "#!/bin/sh\nif [ \"$1\" = \"-vV\" ]; then printf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'; exit 0; fi\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
         )?;
         let fake_cargo = directory.join("cargo");
+        // The build invocation logs its whole argv and every variable the
+        // wrapper is responsible for, so the contract with Cargo (argument
+        // layout, the always-set `NO_ALLOC_*` protocol, which wrapper slot is
+        // used and which blanked) is asserted on rather than assumed. Only
+        // variables that are set show up in `env.log`; an empty one prints as
+        // `NAME=`.
         std::fs::write(
             &fake_cargo,
-            "#!/bin/sh\nif [ \"$1\" = metadata ]; then echo '{\"packages\":[],\"workspace_members\":[]}'; exit 0; fi\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\necho \"$NO_ALLOC_WARN_ONLY|$RUSTC|$NO_ALLOC_EXPECTED_RUSTC\" > env.log\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
+            r#"#!/bin/sh
+if [ "$1" = metadata ]; then echo '{"packages":[],"workspace_members":[]}'; exit 0; fi
+if [ "$2" = config ]; then echo "error: config value is not set" >&2; exit 101; fi
+if [ "$1" = clean ]; then echo "$@" >> clean.log; exit 0; fi
+printf '%s\n' "$@" > argv.log
+env | grep -E '^(NO_ALLOC_[A-Z_]*|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|LD_LIBRARY_PATH)=' | sort > env.log
+mkdir -p "$NO_ALLOC_FRAGMENT_DIR"
+printf '%s\n' '{"report":{"roots":[]},"matched_root_specs":["fake::root"]}' > "$NO_ALLOC_FRAGMENT_DIR/fake.json"
+if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
+"#,
         )?;
         for executable in [&fake_rustc, &fake_cargo] {
             let mut permissions = std::fs::metadata(executable)?.permissions();
@@ -2211,6 +2255,7 @@ mod tests {
             "RUSTC",
             "CARGO_BUILD_RUSTC",
             "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTFLAGS",
             "NO_ALLOC_WARN_ONLY",
             "NO_ALLOC_ROOTS",
             "RUSTC_WRAPPER",
@@ -2222,8 +2267,9 @@ mod tests {
             .map(|name| ((*name).to_owned(), std::env::var_os(name)))
             .collect();
 
-        // SAFETY: this is the only test in this process that mutates the
-        // process environment/current directory; the other tests are pure.
+        // SAFETY: every test that mutates the process environment or current
+        // directory holds `FAKE_RUSTC`, and this one holds it for its whole
+        // body; the remaining tests are pure.
         unsafe {
             std::env::set_var("CARGO", &fake_cargo);
             // The checker resolves `rustc` from PATH (a `RUSTC` override is
@@ -2237,12 +2283,15 @@ mod tests {
             std::env::remove_var("RUSTC");
             std::env::remove_var("CARGO_BUILD_RUSTC");
             std::env::set_var("CARGO_ENCODED_RUSTFLAGS", "--cfg=no_alloc_check");
+            std::env::remove_var("RUSTFLAGS");
             std::env::set_var("NO_ALLOC_WARN_ONLY", "1");
             std::env::set_var("NO_ALLOC_ROOTS", "fake::root");
             std::env::remove_var("RUSTC_WRAPPER");
             std::env::remove_var("RUSTC_WORKSPACE_WRAPPER");
         }
         std::env::set_current_dir(&directory)?;
+        // After the chdir, so it is the same spelling `run` sees.
+        let cwd = std::env::current_dir()?;
 
         let result = run([
             "cargo-no-alloc".to_owned(),
@@ -2271,11 +2320,67 @@ mod tests {
                 "a zero-root report must record the warning: {first:?}"
             );
             ensure!(first.is_success(), "a zero-root run still exits 0");
-            let env_log = std::fs::read_to_string(directory.join("env.log"))?;
+            let fake = directory.join("rustc");
+            let target_dir = cwd.join("target/no-alloc");
+
+            // Run 1: `--all-crates --build-std`, test mode with a runner
+            // separator, warn-only and roots inherited from the environment.
+            let argv = std::fs::read_to_string(directory.join("argv.log"))?;
+            let argv: Vec<&str> = argv.lines().collect();
             ensure!(
-                env_log.starts_with("1|"),
-                "warn-only is passed as 1: {env_log}"
+                argv == [
+                    "test",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--target-dir",
+                    &target_dir.to_string_lossy(),
+                    "-Zbuild-std",
+                    "--",
+                    "--list",
+                ],
+                "forced options go before the runner separator: {argv:?}"
             );
+            let env = parse_env_log(&std::fs::read_to_string(directory.join("env.log"))?);
+            let get = |name: &str| env.get(name).map(String::as_str);
+            ensure!(get("NO_ALLOC_WARN_ONLY") == Some("1"), "{env:?}");
+            ensure!(get("NO_ALLOC_ALL_CRATES") == Some("1"), "{env:?}");
+            ensure!(get("NO_ALLOC_BUILD_STD") == Some("1"), "{env:?}");
+            ensure!(get("NO_ALLOC_ROOTS") == Some("fake::root"), "{env:?}");
+            ensure!(
+                get("NO_ALLOC_FRAGMENT_DIR")
+                    == Some(&*target_dir.join("fragments").to_string_lossy()),
+                "{env:?}"
+            );
+            ensure!(get("RUSTC") == Some(&*fake.to_string_lossy()), "{env:?}");
+            ensure!(
+                get("NO_ALLOC_EXPECTED_RUSTC") == Some(&*fake.to_string_lossy()),
+                "{env:?}"
+            );
+            // `--all-crates` takes the unconditional wrapper slot and blanks
+            // the other; the blank must be present, not merely absent.
+            ensure!(
+                get("RUSTC_WRAPPER").is_some_and(|driver| driver.ends_with("no-alloc-driver")),
+                "{env:?}"
+            );
+            ensure!(get("RUSTC_WORKSPACE_WRAPPER") == Some(""), "{env:?}");
+            ensure!(
+                get("LD_LIBRARY_PATH").is_some_and(|path| path.starts_with("/fake/sysroot/lib")),
+                "{env:?}"
+            );
+            // The caller's encoded flags are extended, never replaced, and
+            // the required flags are added exactly once each.
+            ensure!(get("RUSTFLAGS").is_none(), "{env:?}");
+            let encoded = get("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+            let flags: Vec<&str> = encoded.split('\x1f').collect();
+            ensure!(flags[0] == "--cfg=no_alloc_check", "{flags:?}");
+            for required in REQUIRED_RUSTFLAGS {
+                ensure!(
+                    flags.iter().filter(|flag| *flag == required).count() == 1,
+                    "`{required}` must appear exactly once in {flags:?}"
+                );
+            }
+            ensure!(flags.len() == REQUIRED_RUSTFLAGS.len(), "{flags:?}");
+
             std::fs::write(&stale_report, r#"{"roots":[]}"#)?;
             // SAFETY: same single-mutator condition as above.
             unsafe {
@@ -2296,11 +2401,38 @@ mod tests {
                 "report.json after a failed build must not read as a success"
             );
             // Never left unset: Cargo's `[env]` table would fill a hole.
-            let env_log = std::fs::read_to_string(directory.join("env.log"))?;
-            let fake = directory.join("rustc");
+            let argv = std::fs::read_to_string(directory.join("argv.log"))?;
+            let argv: Vec<&str> = argv.lines().collect();
             ensure!(
-                env_log.trim() == format!("0|{0}|{0}", fake.display()),
-                "warn-only must be explicit and the validated rustc passed on: {env_log}"
+                argv == [
+                    "build",
+                    "--release",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--target-dir",
+                    &target_dir.to_string_lossy(),
+                ],
+                "no `-Zbuild-std` and no separator without them: {argv:?}"
+            );
+            let env = parse_env_log(&std::fs::read_to_string(directory.join("env.log"))?);
+            let get = |name: &str| env.get(name).map(String::as_str);
+            ensure!(
+                get("NO_ALLOC_WARN_ONLY") == Some("0"),
+                "warn-only must be explicit: {env:?}"
+            );
+            ensure!(get("NO_ALLOC_ALL_CRATES") == Some("0"), "{env:?}");
+            ensure!(get("NO_ALLOC_BUILD_STD") == Some("0"), "{env:?}");
+            ensure!(get("RUSTC") == Some(&*fake.to_string_lossy()), "{env:?}");
+            ensure!(
+                get("NO_ALLOC_EXPECTED_RUSTC") == Some(&*fake.to_string_lossy()),
+                "the validated rustc is passed on: {env:?}"
+            );
+            // Mirror of run 1: workspace-only mode uses the workspace slot.
+            ensure!(get("RUSTC_WRAPPER") == Some(""), "{env:?}");
+            ensure!(
+                get("RUSTC_WORKSPACE_WRAPPER")
+                    .is_some_and(|driver| driver.ends_with("no-alloc-driver")),
+                "{env:?}"
             );
             let clean_log = std::fs::read_to_string(directory.join("clean.log"))?;
             ensure!(
