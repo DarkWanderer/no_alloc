@@ -152,6 +152,15 @@ fn visit<'tcx>(
     // graceful "no body" signal.
     if let InstanceKind::Intrinsic(def_id) = instance.def {
         let finding = match tcx.intrinsic(def_id) {
+            // Matched before the table so a name that ever lands in the table
+            // by mistake still gets the per-instantiation check: these
+            // intrinsics lower to a `panic_nounwind` call for a failing
+            // instantiation, which a name-only table cannot express.
+            Some(intrinsic)
+                if let Some(requirement) = ValidityRequirement::from_intrinsic(intrinsic.name) =>
+            {
+                classify_validity_assertion(tcx, instance, intrinsic, requirement, stack)
+            }
             Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => {
                 // An intrinsic has no body of its own; `local` was passed
                 // down unchanged from the body whose MIR contains the call.
@@ -169,9 +178,6 @@ fn visit<'tcx>(
                     }),
                     None => None,
                 }
-            }
-            Some(intrinsic) if ValidityRequirement::from_intrinsic(intrinsic.name).is_some() => {
-                classify_validity_assertion(tcx, instance, intrinsic, stack)
             }
             Some(intrinsic) => Some(Finding::Rejected(
                 stack.clone(),
@@ -363,9 +369,9 @@ fn classify_validity_assertion<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     intrinsic: ty::IntrinsicDef,
+    requirement: ValidityRequirement,
     stack: &[(Instance<'tcx>, Span)],
 ) -> Option<Finding<'tcx>> {
-    let requirement = ValidityRequirement::from_intrinsic(intrinsic.name)?;
     let ty = instance.args.type_at(0);
     let typing_env = ty::TypingEnv::fully_monomorphized();
     let holds = tcx
@@ -676,21 +682,20 @@ fn classify_terminator<'tcx>(
                 "inline assembly can call or do anything opaquely".to_string(),
             ));
         }
-        TerminatorKind::Assert { .. } if tcx.sess.panic_strategy().unwinds() => {
-            edges.push(Edge::Unresolved(
+        // Exhaustive over the panic strategy so a new one must be classified
+        // here instead of falling into the scope-exclusion carve-out.
+        TerminatorKind::Assert { msg, .. } => match panic_strategy(tcx) {
+            PanicStrategy::Unwind => edges.push(Edge::Unresolved(
                 "assertion may invoke the panic handler when panic=unwind".to_string(),
-            ));
-        }
-        // Under immediate-abort there is no carve-out (ADR 0006): codegen
-        // lowers a failing assertion to a call to a core panic lang item,
-        // and that call is followed like any other, rather than trusted to
-        // be the bare `abort` std compiles it to in this mode.
-        TerminatorKind::Assert { msg, .. }
-            if tcx.sess.panic_strategy() == rustc_target::spec::PanicStrategy::ImmediateAbort =>
-        {
-            edges.push(assert_panic_edge(tcx, msg, term_span));
-        }
-        TerminatorKind::Assert { .. } => edges.push(Edge::None),
+            )),
+            // Under immediate-abort there is no carve-out (ADR 0006):
+            // codegen lowers a failing assertion to a call to a core panic
+            // lang item, and that call is followed like any other, rather
+            // than trusted to be the bare `abort` std compiles it to in
+            // this mode.
+            PanicStrategy::ImmediateAbort => edges.push(assert_panic_edge(tcx, msg, term_span)),
+            PanicStrategy::Abort => edges.push(Edge::None),
+        },
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::UnwindResume

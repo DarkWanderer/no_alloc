@@ -317,6 +317,30 @@ mod tests {
         }
     }
 
+    /// Families ADR 0005 leaves out because the table has not audited their
+    /// lowering. Names are checked against the pinned toolchain's
+    /// `core::intrinsics` (`va_start` does not exist there, so it is not
+    /// listed).
+    #[test]
+    fn unaudited_families_are_not_in_the_table() {
+        for name in [
+            "va_arg",
+            "va_copy",
+            "va_end",
+            "rustc_peek",
+            "simd_add",
+            "simd_shuffle",
+            "simd_reduce_add_unordered",
+            "gpu_launch_sized_workgroup_mem",
+            "amdgpu_dispatch_ptr",
+        ] {
+            assert!(
+                !intrinsic_cannot_reach_allocator(name),
+                "`{name}` is an unaudited family and must keep rejecting"
+            );
+        }
+    }
+
     /// These read like layout queries and are not: codegen turns a failing
     /// instantiation into a `panic_nounwind` call that the traversal cannot
     /// see, so classifying them would let an allocating panic handler
