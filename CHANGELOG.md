@@ -51,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordinary cross-crate calls, uninstantiated dependency roots, non-workspace
   markers under `--all-crates`, clone/closure shims, explicit panic calls,
   dynamic drop glue, and thread-local access.
+- `warnings` list in `report.json` (omitted when empty, additive, schema
+  version unchanged). The zero-roots condition is recorded there as well as
+  printed, so a reader of the file alone cannot take `roots: []` for a
+  verified pass; the exit code is unchanged.
+- Fixtures `extern_type_tail`, `weak_linkage_reject`, `async_root_reject`,
+  `cross_crate_shared_generic`, `inlined_generic_root`, `config_build_target`,
+  `config_build_rustc` and `config_env_no_alloc`.
+- Fixtures `cross_crate_shared_generic_release`,
+  `cross_crate_shared_generic_fnptr`, `async_root_upstream_reject`,
+  `package_default_target` and `existing_rustc_attrs_feature`.
 
 
 ### Fixed
@@ -226,6 +236,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.
+
+- A field projection into a type whose struct tail is an extern type is
+  rejected. Codegen sizes the tail with a `panic_nounwind` call that no MIR
+  edge names (ADR 0003).
+- A callee with explicit `linkage`/`import_linkage` (for example
+  `#[linkage = "weak"]`) is rejected: the linker may bind the symbol to a
+  different definition than the MIR checked (ADR 0003).
+- `async fn` roots, marked or `--root`-selected, are a selection error; only
+  the future constructor has MIR, so the body that runs was never checked
+  (ADR 0003).
+- Marked generic roots instantiated in an upstream crate and linked to under
+  share-generics are now discovered in the default (non-`--all-crates`) mode,
+  where they were silently absent from the report. Non-generic markers in
+  non-workspace dependencies still need `--all-crates` (ADR 0004).
+- `#[no_alloc]` now also emits `rustc_no_mir_inline` under
+  `cfg(no_alloc_check)` (the driver injects `feature(rustc_attrs)` and
+  `allow(internal_features)`), so a marked generic root can no longer be
+  MIR-inlined away and reported `NotInstantiated`, which counts as success.
+  Normal builds are unaffected. A `--root`-selected unmarked generic fn is
+  still exposed (ADR 0002).
+- `cargo no-alloc` refuses a configured `build.target` (`[build] target`,
+  `CARGO_BUILD_TARGET`, `--config build.target`), which it silently dropped
+  while the shipped build compiled different `cfg(target_...)` code.
+- `cargo no-alloc` refuses `RUSTC`/`CARGO_BUILD_RUSTC` and a configured
+  `build.rustc` (see below), and the driver fails unless its argv[1] is the
+  validated `rustc` (`NO_ALLOC_EXPECTED_RUSTC`); a substitute compiler shaped
+  the shipped build but not the checked one (ADR 0006).
+- `cargo no-alloc` refuses Cargo `[env]` keys starting `NO_ALLOC_` and always
+  sets `NO_ALLOC_WARN_ONLY` (`1` or `0`) instead of removing it, so config
+  cannot steer the driver (ADR 0006).
+- A configured `build.rustc` is refused (persisted `selection_errors` entry,
+  nothing built) instead of warned about and ignored: a substitute compiler
+  adding `--cfg heap` shaped `cargo build` but not the checked build, so the
+  report could pass code the shipped build allocates in (ADR 0006).
+- Upstream-shared generic roots are found through the collector's own
+  per-instance neighbour query rather than a Call/Drop-only walk, so a marked
+  root reached through an upstream body at `opt-level = 3` (an
+  `#[inline(never)]` wrapper), through a reify cast to a fn pointer, an unsize
+  cast or a fn item in a const is no longer missed (ADR 0004).
+- A `--root` naming an upstream `async fn` is reported as a selection error
+  instead of being dropped after its spec was marked matched.
+- `cargo no-alloc` refuses a workspace member that sets `default-target` or
+  `forced-target` (`cargo-features = ["per-package-target"]`): the checker's
+  `--target <host>` replaced it, so the shipped build targeted another
+  platform than the one checked.
+- A crate that already has `#![feature(rustc_attrs)]` is checked again: the
+  injected `-Zcrate-attr=feature(rustc_attrs)` made it fail the
+  deny-by-default `duplicate_features` lint, so nothing was checked. The
+  checker now also injects `-Zcrate-attr=allow(duplicate_features)`.
+- The zero-roots warning also fires when every root is `NotInstantiated`.
+- README and ADR 0003/0006: `Unreachable` is no longer described as lowering
+  to a `panic_fmt` call (it codegens to a bare LLVM `unreachable`); the
+  garbled duplicate sentence in the panic-scope paragraph is fixed; the
+  `Shim(DropGlue)` row now says an explicit `drop_in_place::<dyn T>` does
+  construct the glue and is rejected on its residual `Drop`; ADR 0006 no
+  longer says `Assert` has the `Edge::None` carve-out under `immediate-abort`.
+- README/ADR 0004 no longer imply cross-crate generic roots were always
+  found at downstream sites; the module comment in `traversal.rs` names the
+  real memoization key, `(Instance, bool)`.
+- README documents the limitations the audit left open: allocator-API calls
+  other than the `__rust_alloc` entry points, checked build differing from the
+  shipped build, `--root` on unmarked generics, and the linkage rule.
 
 ### Changed
 

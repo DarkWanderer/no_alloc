@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended 2026-08-23, 2026-08-25, 2026-09-03, and 2026-10-21.
+Accepted, amended 2026-08-23, 2026-08-25, 2026-09-03, 2026-10-21, and 2026-10-30.
 
 ## Decision
 
@@ -23,7 +23,8 @@ explicitly. The exhaustive classification is:
 | `InlineAsm` | Reject as opaque |
 | `Assert` | Out of scope (not traversed) under `panic=abort`; traversed into the panic lang item codegen calls under `-Cpanic=immediate-abort` (ADR 0006); reject under `panic=unwind` |
 | `Goto`, `SwitchInt`, `Return` | Safe control flow |
-| `Unreachable`, `UnwindResume`, `UnwindTerminate` | Out of scope: no MIR callee, but each lowers to a real call (the panic runtime, or a foreign unwind-support routine) that this traversal does not follow |
+| `Unreachable` | Safe: codegens to a bare LLVM `unreachable`, no code |
+| `UnwindResume`, `UnwindTerminate` | Out of scope: no MIR callee, but each lowers to a real call (a foreign unwind-support routine, or a nounwind panic-handler call) that this traversal does not follow |
 | terminate-on-unwind action | Same as `UnwindTerminate`: out of scope, not a synthesized call edge |
 | pre-lowering coroutine/false-edge forms | Reject as unexpected at this analysis stage |
 
@@ -34,12 +35,12 @@ question for a shim, whose MIR is synthesized on demand.
 
 | `InstanceKind` / `ShimKind` | Classification |
 |---|---|
-| `Item` | Traverse if MIR is available and the item is not foreign; otherwise reject |
+| `Item` | Traverse if MIR is available and the item is not foreign; otherwise reject. Also reject when the item has explicit `linkage`/`import_linkage` codegen attributes (amended 2026-10-30): the linker may bind the symbol to a different definition (weak linkage), so this MIR is not evidence of what runs |
 | `Intrinsic` | Classify against ADR 0005's audited intrinsic table, and walk its fallback body whenever codegen may call it; reject an unrecognized intrinsic |
 | `LlvmIntrinsic` | Reject — no callable MIR exists |
 | `Virtual` | Reject — the runtime-selected vtable callee is not statically known |
 | `Shim(VTable)`, `Shim(Reify)`, `Shim(FnPtr)`, `Shim(ClosureOnce)` | Traverse — the synthesized body exposes its direct or indirect call to the ordinary call-edge classifier |
-| `Shim(DropGlue)` | Traverse for concrete types; a `dyn` place is rejected by the `Drop` terminator before constructing its glue |
+| `Shim(DropGlue)` | Traverse for concrete types. A `Drop` terminator on a `dyn` place is rejected before constructing glue; an explicit `ptr::drop_in_place::<dyn T>` call does construct it (`DropGlue(_, Some(dyn T))`) and is rejected on the shim body's residual `Drop` of the `dyn` place |
 | `Shim(Clone)` | Traverse — the synthesized body contains either a trivial copy or the real per-field clone calls |
 | `Shim(FnPtrAddr)` | Traverse — the synthesized body is a call-free pointer cast |
 | `Shim(ThreadLocal)` | Reject — TLS access can lower to a runtime call with no MIR callee |
@@ -62,6 +63,22 @@ storage/discriminant operations with no call edge. The same conservative TLS
 decision applies to `ShimKind::ThreadLocal`; `thread_local_reject` covers the
 same-crate statement form.
 
+**Extern-type tail projection (amended 2026-10-30).** A `ProjectionElem::Field`
+into a type whose `struct_tail_for_codegen` is `ty::Foreign` is rejected, as a
+place-level rejection alongside `ThreadLocalRef`. Codegen's `project_field`
+computes the unsized tail's size through `size_and_align_of_dst`, whose
+`Foreign` arm emits a `panic_nounwind` lang-item call that appears in no MIR
+body. The rule does not mirror the offset condition under which codegen takes
+that path; any such projection rejects. It is recorded as a pending rejection,
+so an allocator violation elsewhere in the same body still wins. Pinned by
+`tests/ui/extern_type_tail`; the linkage rule above by
+`tests/ui/weak_linkage_reject`.
+
+**Async fn roots (amended 2026-10-30).** An `async fn` has MIR only for its
+future constructor; the body that runs is a separate coroutine. A marked or
+`--root`-selected `async fn` is a selection error rather than a pass on the
+constructor (`tests/ui/async_root_reject`).
+
 Demonstrating an allocator call through dynamic TLS would require a `cdylib`
 loaded with `dlopen` and has not been done. The rejection does not rely on that
 platform-specific path: the unmodeled runtime operation is sufficient under
@@ -74,7 +91,9 @@ the reject-don't-assume policy.
 traversal revisited the same instance and treated the cycle as complete,
 while codegen actually calls the concrete destructor through the vtable's
 drop slot. The `Drop` classifier now rejects a `dyn` place before constructing
-that glue. The `drop_dyn_arena` fixture pins this behavior.
+that glue. An explicit `ptr::drop_in_place::<dyn T>` call does construct the
+glue, and is rejected on the glue body's own `Drop` of the `dyn` place. The
+`drop_dyn_arena` fixture pins this behavior.
 
 Under plain `panic=abort`, a failing assertion still calls
 `core::panicking::panic_fmt` and the `#[panic_handler]` — which, with `std`,

@@ -1,0 +1,10 @@
+{
+  "roots": [],
+  "selection_errors": [
+    "requested root `async_root_reject::work` is an async fn (only its future constructor would be checked)"
+  ],
+  "warnings": [
+    "no_alloc checked 0 root instances — nothing was analyzed. This usually means either no `#[no_alloc]` marker was reached while building, every marked generic function was never instantiated (reported `not_instantiated`), or the marker lives in a crate outside the workspace (pass --all-crates to instrument it)."
+  ],
+  "schema_version": 2
+}

@@ -108,6 +108,16 @@ pub struct Report {
     pub panic_strategy: Option<PanicStrategy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selection_errors: Vec<String>,
+    /// Conditions that leave the run's exit status alone but that a reader
+    /// of the persisted file must not mistake for a clean pass — today, a
+    /// run that checked no root at all (`roots: []` is vacuously a success,
+    /// see `is_success`). Unlike `selection_errors` these never fail the
+    /// report. Absent when empty, so reports written before the field
+    /// existed still deserialize and clean reports are byte-identical; that
+    /// additive, skipped-when-empty shape is why the schema version is not
+    /// bumped for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     #[serde(default = "legacy_schema_version")]
     pub schema_version: u32,
 }
@@ -118,6 +128,7 @@ impl Default for Report {
             roots: Vec::new(),
             panic_strategy: None,
             selection_errors: Vec::new(),
+            warnings: Vec::new(),
             schema_version: CURRENT_SCHEMA_VERSION,
         }
     }
@@ -180,6 +191,7 @@ impl Report {
             }
             merged.roots.extend(report.roots);
             merged.selection_errors.extend(report.selection_errors);
+            merged.warnings.extend(report.warnings);
             strategies.extend(report.panic_strategy);
         }
         // Every fragment of one build sees the same flags, so anything other
@@ -217,6 +229,8 @@ impl Report {
         });
         merged.selection_errors.sort();
         merged.selection_errors.dedup();
+        merged.warnings.sort();
+        merged.warnings.dedup();
         merged
     }
 
@@ -306,6 +320,36 @@ mod tests {
             ..Report::default()
         };
         assert!(!report.is_success());
+    }
+
+    #[test]
+    fn warnings_do_not_fail_the_report_and_are_skipped_when_empty() -> Result<(), serde_json::Error>
+    {
+        let clean = Report::default();
+        assert!(!serde_json::to_string(&clean)?.contains("warnings"));
+
+        let warned = Report {
+            warnings: vec!["checked 0 roots".into()],
+            ..Report::default()
+        };
+        // A zero-root run still exits 0, so the warning must not flip it.
+        assert!(warned.is_success());
+        let round_tripped: Report = serde_json::from_str(&serde_json::to_string(&warned)?)?;
+        assert_eq!(round_tripped.warnings, ["checked 0 roots"]);
+        // Reports written before the field existed still read back.
+        let legacy: Report = serde_json::from_str(r#"{"roots":[]}"#)?;
+        assert!(legacy.warnings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn merge_unions_and_deduplicates_warnings() {
+        let with = |w: &str| Report {
+            warnings: vec![w.into()],
+            ..Report::default()
+        };
+        let merged = Report::merge([with("b"), with("a"), with("b")]);
+        assert_eq!(merged.warnings, ["a", "b"]);
     }
 
     #[test]

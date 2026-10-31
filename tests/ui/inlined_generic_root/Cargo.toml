@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "inlined_generic_root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+
+[profile.dev]
+panic = "abort"
+opt-level = 3
+incremental = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

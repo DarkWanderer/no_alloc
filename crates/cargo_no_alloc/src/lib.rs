@@ -43,10 +43,13 @@ Options:
 // Printed unconditionally (not just under --warn-only) because a clean exit
 // with zero roots checked is not a passing result, just an unverified one —
 // see the README's "By default only workspace members are instrumented".
-const ZERO_ROOTS_WARNING: &str = "warning: no_alloc checked 0 root instances \
+// Also the message when roots were found but none was instantiated: those
+// report `not_instantiated`, which is success without a verdict.
+const ZERO_ROOTS_WARNING: &str = "no_alloc checked 0 root instances \
 — nothing was analyzed. This usually means either no `#[no_alloc]` marker \
-was reached while building, or the marker lives in a crate outside the \
-workspace (pass --all-crates to instrument it).";
+was reached while building, every marked generic function was never \
+instantiated (reported `not_instantiated`), or the marker lives in a crate \
+outside the workspace (pass --all-crates to instrument it).";
 
 /// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
 /// unstable, hence the accompanying `-Zunstable-options`. Passing it here
@@ -75,6 +78,13 @@ const REQUIRED_RUSTFLAGS: &[&str] = &[
     "-Zcrate-attr=feature(register_tool)",
     "-Zcrate-attr=register_tool(no_alloc_tool)",
     "-Zalways-encode-mir",
+    "-Zcrate-attr=feature(rustc_attrs)",
+    // `rustc_attrs` (for `#[rustc_no_mir_inline]` on markers) is an internal
+    // feature; without this every checked crate warns about it.
+    "-Zcrate-attr=allow(internal_features)",
+    // A crate that already has `#![feature(rustc_attrs)]` would otherwise
+    // fail the deny-by-default `duplicate_features` lint on the copy above.
+    "-Zcrate-attr=allow(duplicate_features)",
 ];
 const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by cargo.\n\
@@ -219,9 +229,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     }))
 }
 
-fn host_triple() -> Result<String> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let output = Command::new(&rustc)
+fn host_triple(rustc: &str) -> Result<String> {
+    let output = Command::new(rustc)
         .args(["--print", "host-tuple"])
         .output()
         .with_context(|| format!("failed to run `{rustc} --print host-tuple`"))?;
@@ -234,6 +243,55 @@ fn host_triple() -> Result<String> {
         .context("host-tuple output is not UTF-8")?
         .trim()
         .to_owned())
+}
+
+/// Variables that make Cargo compile with a program other than the
+/// toolchain's own `rustc`. The driver links its own rustc and ignores the
+/// binary Cargo hands it, so a script behind one of these (adding `--cfg`
+/// flags, say) shapes the shipped build but never the checked one.
+const RUSTC_OVERRIDE_VARS: &[&str] = &["RUSTC", "CARGO_BUILD_RUSTC"];
+
+/// The override variables `is_set` reports, in declaration order. Taking the
+/// predicate keeps this testable without touching process-wide state.
+fn rustc_overrides_set(is_set: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    RUSTC_OVERRIDE_VARS
+        .iter()
+        .copied()
+        .filter(|name| is_set(name))
+        .collect()
+}
+
+fn reject_rustc_override() -> Result<()> {
+    let set = rustc_overrides_set(|name| env::var_os(name).is_some());
+    ensure!(
+        set.is_empty(),
+        "{} is set, but the checker compiles with the toolchain's own rustc and cannot honour a \
+         substitute: a custom rustc would shape the shipped build and not the checked one. \
+         Unset it; the checker owns its compiler",
+        set.join("/")
+    );
+    Ok(())
+}
+
+/// The `rustc` Cargo would find on `PATH`, as an absolute path. Not
+/// canonicalized: under rustup this is a symlink to the `rustup` proxy, which
+/// only dispatches on the name it was invoked by.
+///
+/// The probes and the build both use this one path (the build is handed it as
+/// `RUSTC`), so what was validated is what runs.
+fn resolve_rustc() -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = env::var_os("PATH").context("PATH is not set, so `rustc` cannot be found")?;
+    for directory in env::split_paths(&path) {
+        let candidate = directory.join("rustc");
+        let executable = fs::metadata(&candidate)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+        if executable {
+            return std::path::absolute(&candidate)
+                .with_context(|| format!("failed to absolutize {}", candidate.display()));
+        }
+    }
+    bail!("no executable `rustc` found on PATH")
 }
 
 // Checks the toolchain of the project being analyzed, mirroring build.rs's
@@ -266,9 +324,8 @@ fn verify_pinned_toolchain(rustc: &str) -> Result<()> {
     Ok(())
 }
 
-fn sysroot_lib_dir() -> Result<PathBuf> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let output = Command::new(&rustc)
+fn sysroot_lib_dir(rustc: &str) -> Result<PathBuf> {
+    let output = Command::new(rustc)
         .args(["--print", "sysroot"])
         .output()
         .with_context(|| format!("failed to run `{rustc} --print sysroot`"))?;
@@ -439,6 +496,10 @@ fn ambient_immediate_abort_needs_build_std(
 /// the build blanks both wrapper variables (an empty value disables only its
 /// own config key), so a configured wrapper (sccache in `~/.cargo/config.toml`)
 /// cannot take effect and refusing would only block users for nothing.
+///
+/// `build.rustc` is deliberately not here: the shipped build would use the
+/// configured compiler (a script adding `--cfg` flags, say) while the checked
+/// build runs the toolchain `rustc`, so it is refused (`build_rustc_rejection`).
 const WRAPPER_CONFIG_KEYS: &[&str] = &["build.rustc-wrapper", "build.rustc-workspace-wrapper"];
 
 /// What `cargo config get` said about one key. `Unset` is a successful
@@ -607,6 +668,201 @@ fn config_rustflags(
     ))
 }
 
+/// Targets named by a `build.target` value: a string or an array of strings.
+/// An empty string or array names nothing (Cargo treats it as unset).
+fn parse_build_targets(json: &str) -> Result<Vec<String>> {
+    match serde_json::from_str::<serde_json::Value>(json)
+        .context("Cargo config `build.target` is not valid JSON")?
+    {
+        serde_json::Value::String(target) => Ok(Some(target)
+            .filter(|target| !target.trim().is_empty())
+            .into_iter()
+            .collect()),
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(target) => Ok(target),
+                other => bail!("Cargo config `build.target` has a non-string entry: {other}"),
+            })
+            .filter(|target| target.as_ref().map_or(true, |t| !t.trim().is_empty()))
+            .collect(),
+        other => bail!("Cargo config `build.target` is neither a string nor an array: {other}"),
+    }
+}
+
+/// The refusal for a configured `build.target`. The checker always builds for
+/// the host (`--target <host>`) and cannot honour another one, so the
+/// config value would be dropped silently and `#[cfg(target_...)]` code the
+/// shipped build compiles would never be seen.
+fn build_target_rejection(targets: &[String]) -> String {
+    format!(
+        "Cargo config sets `build.target` to {} (via `[build] target`, `CARGO_BUILD_TARGET` or \
+         `--config`), but the checker owns its target and always builds for the host, so the \
+         shipped build's `cfg(target_...)` code would go unchecked; unset build.target / \
+         CARGO_BUILD_TARGET",
+        targets
+            .iter()
+            .map(|target| format!("`{target}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// The refusal for a configured `build.rustc`. The checked build compiles
+/// with the toolchain's own `rustc` while `cargo build` would run the
+/// configured one, which can differ in anything (extra `--cfg`/`-C` flags),
+/// so verdicts could describe a different program than the one shipped.
+fn build_rustc_rejection(value: &str) -> String {
+    format!(
+        "Cargo config sets `build.rustc` to {value} (via `[build] rustc` or `--config`), but \
+         the checker compiles with the toolchain's own rustc, so the shipped build could differ \
+         from the checked one (extra `--cfg` flags, say); unset build.rustc"
+    )
+}
+
+/// Manifest keys that give a package its own build target. Cargo's
+/// `cargo-features = ["per-package-target"]` honours them over the CLI-less
+/// default, but the checker always passes `--target <host>`, which replaces
+/// them, so the shipped build and the checked one would target different
+/// platforms. `cargo metadata` does not expose either key on the pinned
+/// Cargo, hence the manifest is read.
+const PER_PACKAGE_TARGET_KEYS: [&str; 2] = ["default-target", "forced-target"];
+
+/// Which of [`PER_PACKAGE_TARGET_KEYS`] a manifest's `[package]` sets.
+fn per_package_target_keys(manifest: &str) -> Result<Vec<&'static str>> {
+    let table: toml::Table = manifest.parse().context("manifest is not valid TOML")?;
+    let package = table.get("package").and_then(toml::Value::as_table);
+    Ok(PER_PACKAGE_TARGET_KEYS
+        .into_iter()
+        .filter(|key| package.is_some_and(|package| package.contains_key(*key)))
+        .collect())
+}
+
+/// Manifest paths of the workspace members in `cargo metadata --no-deps` JSON.
+fn workspace_manifest_paths(json: &str) -> Result<Vec<PathBuf>> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(json).context("`cargo metadata` output is not valid JSON")?;
+    let members: Vec<&str> = metadata["workspace_members"]
+        .as_array()
+        .context("`cargo metadata` output has no `workspace_members`")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let packages = metadata["packages"]
+        .as_array()
+        .context("`cargo metadata` output has no `packages`")?;
+    packages
+        .iter()
+        .filter(|package| {
+            package["id"]
+                .as_str()
+                .is_some_and(|id| members.contains(&id))
+        })
+        .map(|package| {
+            package["manifest_path"]
+                .as_str()
+                .map(PathBuf::from)
+                .context("a workspace package has no `manifest_path`")
+        })
+        .collect()
+}
+
+/// Argv (after the cargo binary) of the `cargo metadata` call that lists the
+/// workspace the build will use. `--manifest-path` is an option of the
+/// `metadata` subcommand, not a global one, so it must follow `metadata`;
+/// `--config` is accepted globally and stays in front.
+fn metadata_args(cargo_args: &[String]) -> Vec<String> {
+    let mut argv = config_override_args(cargo_args);
+    argv.extend(["metadata", "--format-version", "1", "--no-deps"].map(String::from));
+    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--manifest-path" {
+            argv.push(arg.clone());
+            argv.extend(args.next().cloned());
+        } else if arg.starts_with("--manifest-path=") {
+            argv.push(arg.clone());
+        }
+    }
+    argv
+}
+
+/// `(manifest path, keys)` for every workspace member that sets a per-package
+/// target. Honours the build's `--manifest-path` and `--config` so it looks at
+/// the workspace the build will.
+fn workspace_per_package_targets(
+    cargo: &OsString,
+    cargo_args: &[String],
+) -> Result<Vec<(String, Vec<&'static str>)>> {
+    let output = Command::new(cargo)
+        .args(metadata_args(cargo_args))
+        .output()
+        .context("failed to spawn `cargo metadata`")?;
+    ensure!(
+        output.status.success(),
+        "`cargo metadata` failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let mut found = Vec::new();
+    for path in workspace_manifest_paths(&String::from_utf8_lossy(&output.stdout))? {
+        let manifest = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let keys = per_package_target_keys(&manifest)
+            .with_context(|| format!("while reading {}", path.display()))?;
+        if !keys.is_empty() {
+            found.push((path.display().to_string(), keys));
+        }
+    }
+    Ok(found)
+}
+
+fn per_package_target_rejection(found: &[(String, Vec<&str>)]) -> String {
+    let described = found
+        .iter()
+        .map(|(manifest, keys)| {
+            let keys: Vec<String> = keys.iter().map(|key| format!("`{key}`")).collect();
+            format!("`{manifest}` ({})", keys.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "workspace manifest(s) {described} set a per-package target, but the checker owns its \
+         target and always builds for the host, which replaces it, so the shipped build's target \
+         code would go unchecked; remove `default-target` / `forced-target`"
+    )
+}
+
+/// Keys of Cargo's `[env]` table that the checker reserves. Cargo fills any
+/// unset variable of a spawned process from `[env]` (and overwrites set ones
+/// for `force = true`), so an entry here can steer the driver — flip
+/// `NO_ALLOC_WARN_ONLY`, or redirect `NO_ALLOC_FRAGMENT_DIR` so the report
+/// sees no roots.
+fn reserved_env_keys(env_json: &str) -> Result<Vec<String>> {
+    let table: serde_json::Value =
+        serde_json::from_str(env_json).context("Cargo `env` config is not valid JSON")?;
+    let table = table
+        .as_object()
+        .context("Cargo `env` config is not a table")?;
+    let mut keys: Vec<String> = table
+        .keys()
+        .filter(|key| key.starts_with("NO_ALLOC_"))
+        .cloned()
+        .collect();
+    keys.sort();
+    Ok(keys)
+}
+
+fn reserved_env_rejection(keys: &[String]) -> String {
+    format!(
+        "Cargo config `[env]` sets {}, which the checker reserves for steering its own driver \
+         and would let the config change what is reported; remove the `NO_ALLOC_*` entries \
+         from the `[env]` table",
+        keys.iter()
+            .map(|key| format!("`{key}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 /// A report that records why the run was refused, so `is_success()` is
 /// false for anyone reading the persisted file.
 fn rejected_report(mut reasons: Vec<String>) -> Report {
@@ -630,8 +886,7 @@ fn wrapper_warning(key: &str, line: &str) -> String {
         .map(|(value, origin)| format!("set to {} from {origin}", value.trim()))
         .unwrap_or_else(|| format!("({line})"));
     format!(
-        "ignoring `{key}` {described} for this run: the driver must be the only program \
-         wrapping rustc"
+        "ignoring `{key}` {described} for this run: the driver must be the only program wrapping rustc"
     )
 }
 
@@ -715,9 +970,13 @@ fn clear_checker_artifacts(
     inv: &Invocation,
     target_dir: &Path,
     host: &str,
+    rustc: &Path,
 ) -> Result<()> {
     let mut clean = Command::new(cargo);
     clean.arg("clean");
+    // `cargo clean --target` probes the compiler too, so a `build.rustc` from
+    // config would otherwise run here, before the build's own override.
+    clean.env("RUSTC", rustc);
     if !inv.all_crates {
         clean.arg("--workspace");
     }
@@ -850,7 +1109,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // wrong toolchain otherwise fails much further down, in
     // `sysroot_lib_dir`, as a raw dynamic-linker error instead of this
     // actionable message.
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    //
+    // The override check comes first so that no probe ever runs a substitute
+    // compiler, and the probes below use the same resolved path the build is
+    // handed.
+    reject_rustc_override()?;
+    let rustc_path = resolve_rustc()?;
+    let rustc = rustc_path
+        .to_str()
+        .context("the path of `rustc` is not valid UTF-8")?
+        .to_owned();
     verify_pinned_toolchain(&rustc)?;
     if env::var("NO_ALLOC_WARN_ONLY").as_deref() == Ok("1") {
         inv.warn_only = true;
@@ -867,7 +1135,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     }
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let host = host_triple()?;
+    let host = host_triple(&rustc)?;
     // The fragment directory exists before Cargo first sees this custom
     // target, so create Cargo's safety tag before asking `cargo clean` to
     // manage it on this and later runs.
@@ -881,10 +1149,45 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // that was not checked.
     let config_args = config_override_args(&inv.cargo_args);
     // Neutralised below by blanking the wrapper variables, so only a warning.
+    // (`build.rustc` is not: see `WRAPPER_CONFIG_KEYS`.)
     for warning in configured_wrappers(&cargo, &config_args)? {
         eprintln!("warning: {warning}");
     }
     let mut rejections = Vec::new();
+    if let Some(json) = cargo_config_get(
+        &cargo,
+        &config_args,
+        "build.rustc",
+        &["--format", "json-value"],
+    )? {
+        // An empty value is Cargo's "unset".
+        let value = json.trim();
+        if value != "\"\"" && !value.is_empty() {
+            rejections.push(build_rustc_rejection(value));
+        }
+    }
+    if let Some(json) = cargo_config_get(
+        &cargo,
+        &config_args,
+        "build.target",
+        &["--format", "json-value"],
+    )? {
+        let targets = parse_build_targets(&json)?;
+        if !targets.is_empty() {
+            rejections.push(build_target_rejection(&targets));
+        }
+    }
+    let per_package_targets = workspace_per_package_targets(&cargo, &inv.cargo_args)?;
+    if !per_package_targets.is_empty() {
+        rejections.push(per_package_target_rejection(&per_package_targets));
+    }
+    if let Some(json) = cargo_config_get(&cargo, &config_args, "env", &["--format", "json-value"])?
+    {
+        let keys = reserved_env_keys(&json)?;
+        if !keys.is_empty() {
+            rejections.push(reserved_env_rejection(&keys));
+        }
+    }
     let mut imported_rustflags = Vec::new();
     // Cargo ignores config rustflags entirely once either variable is set
     // (even to an empty value), so the caller's environment is already what
@@ -946,7 +1249,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
          strategy yourself)"
     );
 
-    clear_checker_artifacts(&cargo, &inv, &target_dir, &host)?;
+    clear_checker_artifacts(&cargo, &inv, &target_dir, &host, &rustc_path)?;
     if fragment_dir.exists() {
         fs::remove_dir_all(&fragment_dir)?;
     }
@@ -981,13 +1284,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         if inv.all_crates { "1" } else { "0" },
     );
     command.env("NO_ALLOC_BUILD_STD", if inv.build_std { "1" } else { "0" });
-    if inv.warn_only {
-        command.env("NO_ALLOC_WARN_ONLY", "1");
-    } else {
-        command.env_remove("NO_ALLOC_WARN_ONLY");
-    }
+    // Always set, never removed: a removed variable is a hole Cargo's `[env]`
+    // table would fill. The driver treats only exactly "1" as warn-only.
+    command.env("NO_ALLOC_WARN_ONLY", if inv.warn_only { "1" } else { "0" });
+    // Hand Cargo the rustc that was validated above (`RUSTC` outranks
+    // `build.rustc`), and tell the driver which one that is so it can refuse
+    // to compile when anything else arrives as its argv[1].
+    command.env("RUSTC", &rustc_path);
+    command.env("NO_ALLOC_EXPECTED_RUSTC", &rustc_path);
     let driver = find_driver()?;
-    let sysroot_lib = sysroot_lib_dir()?;
+    let sysroot_lib = sysroot_lib_dir(&rustc)?;
     command.env(
         "LD_LIBRARY_PATH",
         combined_ld_library_path(&sysroot_lib, env::var_os("LD_LIBRARY_PATH").as_deref()),
@@ -1022,6 +1328,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let mixed_sysroot = mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort);
     taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
     taint_report_for_failed_build(&mut report, cargo_status.success());
+    // Persisted like the taints above, but as a warning: the exit status
+    // stays 0 (a workspace may legitimately have no markers), yet a reader of
+    // `report.json` alone must not take `roots: []`, or a list of roots that
+    // were never instantiated, for a verified pass.
+    if !report.checked_an_instance() {
+        report.warnings.push(ZERO_ROOTS_WARNING.to_owned());
+    }
     report
         .write_to_file(&report_path)
         .context("failed to write final report.json")?;
@@ -1036,14 +1349,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         .iter()
         .filter(|root| !matches!(root.verdict, Verdict::Pass | Verdict::NotInstantiated))
         .count();
-    eprintln!(
-        "no_alloc: checked {} root instance(s), {failures} finding(s)",
-        report.roots.len()
-    );
-    // 0 roots is a silent-pass hazard, not a clean pass: it exits 0 and
+    // Counts instances with a verdict so this line agrees with the
+    // "checked 0 root instances" warning for a not-instantiated-only run.
+    let checked = report
+        .roots
+        .iter()
+        .filter(|root| !matches!(root.verdict, Verdict::NotInstantiated))
+        .count();
+    eprintln!("no_alloc: checked {checked} root instance(s), {failures} finding(s)");
+    // No verdict at all (0 roots, or only `not_instantiated` ones) is a silent-pass hazard, not a clean pass: it exits 0 and
     // looks identical to "everything checked out" unless called out here.
-    if report.roots.is_empty() {
-        eprintln!("{ZERO_ROOTS_WARNING}");
+    if !report.checked_an_instance() {
+        eprintln!("warning: {ZERO_ROOTS_WARNING}");
     }
     // The report is written first (above), so the evidence survives this
     // failure regardless of `--warn-only` — a mixed sysroot invalidates the
@@ -1091,6 +1408,36 @@ mod tests {
             ParsedArgs::Help => bail!("expected an Invocation, got --help"),
             ParsedArgs::Version => bail!("expected an Invocation, got --version"),
         }
+    }
+
+    #[test]
+    fn metadata_args_put_manifest_path_after_the_subcommand() -> Result<()> {
+        let to_args = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        for forwarded in [
+            &["build", "--manifest-path", "/w/Cargo.toml"][..],
+            &["build", "--manifest-path=/w/Cargo.toml"][..],
+        ] {
+            let mut cargo_args = to_args(forwarded);
+            cargo_args.extend(to_args(&["--config", "a=1", "--", "--manifest-path", "x"]));
+            let argv = metadata_args(&cargo_args);
+            let metadata = argv
+                .iter()
+                .position(|a| a == "metadata")
+                .context("metadata")?;
+            let manifest = argv
+                .iter()
+                .position(|a| a.starts_with("--manifest-path"))
+                .context("manifest-path")?;
+            assert!(metadata < manifest, "{argv:?}");
+            assert_eq!(&argv[..2], ["--config", "a=1"]);
+            // Only the pre-`--` occurrence belongs to cargo.
+            let count = argv
+                .iter()
+                .filter(|a| a.starts_with("--manifest-path"))
+                .count();
+            assert_eq!(count, 1, "{argv:?}");
+        }
+        Ok(())
     }
 
     #[test]
@@ -1661,9 +2008,12 @@ mod tests {
     }
 
     #[test]
-    fn zero_roots_warning_names_the_two_likely_causes() {
+    fn zero_roots_warning_names_the_likely_causes() {
         assert!(ZERO_ROOTS_WARNING.contains("--all-crates"));
+        assert!(ZERO_ROOTS_WARNING.contains("not_instantiated"));
         assert!(ZERO_ROOTS_WARNING.contains("0 root instances"));
+        // Printed with a `warning:` prefix and persisted without one.
+        assert!(!ZERO_ROOTS_WARNING.starts_with("warning:"));
     }
 
     #[test]
@@ -1846,7 +2196,7 @@ mod tests {
         let fake_cargo = directory.join("cargo");
         std::fs::write(
             &fake_cargo,
-            "#!/bin/sh\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
+            "#!/bin/sh\nif [ \"$1\" = metadata ]; then echo '{\"packages\":[],\"workspace_members\":[]}'; exit 0; fi\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\necho \"$NO_ALLOC_WARN_ONLY|$RUSTC|$NO_ALLOC_EXPECTED_RUSTC\" > env.log\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
         )?;
         for executable in [&fake_rustc, &fake_cargo] {
             let mut permissions = std::fs::metadata(executable)?.permissions();
@@ -1857,7 +2207,9 @@ mod tests {
         let original_directory = std::env::current_dir()?;
         let variables = [
             "CARGO",
+            "PATH",
             "RUSTC",
+            "CARGO_BUILD_RUSTC",
             "CARGO_ENCODED_RUSTFLAGS",
             "NO_ALLOC_WARN_ONLY",
             "NO_ALLOC_ROOTS",
@@ -1874,7 +2226,16 @@ mod tests {
         // process environment/current directory; the other tests are pure.
         unsafe {
             std::env::set_var("CARGO", &fake_cargo);
-            std::env::set_var("RUSTC", &fake_rustc);
+            // The checker resolves `rustc` from PATH (a `RUSTC` override is
+            // refused), so the fake is made findable there instead.
+            let mut path = directory.clone().into_os_string();
+            if let Some(original) = std::env::var_os("PATH") {
+                path.push(":");
+                path.push(original);
+            }
+            std::env::set_var("PATH", path);
+            std::env::remove_var("RUSTC");
+            std::env::remove_var("CARGO_BUILD_RUSTC");
             std::env::set_var("CARGO_ENCODED_RUSTFLAGS", "--cfg=no_alloc_check");
             std::env::set_var("NO_ALLOC_WARN_ONLY", "1");
             std::env::set_var("NO_ALLOC_ROOTS", "fake::root");
@@ -1899,9 +2260,28 @@ mod tests {
         // stale passing report from an earlier run must not survive either.
         let stale_report = directory.join("target/no-alloc/report.json");
         let failed_run = (|| -> Result<()> {
+            // The zero-root run above must have persisted its warning, not
+            // only printed it: the file is what other tools read.
+            let first: Report = serde_json::from_reader(std::fs::File::open(&stale_report)?)?;
+            ensure!(
+                first
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("0 root instances")),
+                "a zero-root report must record the warning: {first:?}"
+            );
+            ensure!(first.is_success(), "a zero-root run still exits 0");
+            let env_log = std::fs::read_to_string(directory.join("env.log"))?;
+            ensure!(
+                env_log.starts_with("1|"),
+                "warn-only is passed as 1: {env_log}"
+            );
             std::fs::write(&stale_report, r#"{"roots":[]}"#)?;
             // SAFETY: same single-mutator condition as above.
-            unsafe { std::env::set_var("FAKE_CARGO_FAIL", "1") };
+            unsafe {
+                std::env::set_var("FAKE_CARGO_FAIL", "1");
+                std::env::remove_var("NO_ALLOC_WARN_ONLY");
+            }
             let failed = run(strings(&[
                 "cargo-no-alloc",
                 "--root=fake::root",
@@ -1914,6 +2294,13 @@ mod tests {
             ensure!(
                 !report.is_success(),
                 "report.json after a failed build must not read as a success"
+            );
+            // Never left unset: Cargo's `[env]` table would fill a hole.
+            let env_log = std::fs::read_to_string(directory.join("env.log"))?;
+            let fake = directory.join("rustc");
+            ensure!(
+                env_log.trim() == format!("0|{0}|{0}", fake.display()),
+                "warn-only must be explicit and the validated rustc passed on: {env_log}"
             );
             let clean_log = std::fs::read_to_string(directory.join("clean.log"))?;
             ensure!(
@@ -1941,6 +2328,131 @@ mod tests {
         std::fs::remove_dir_all(directory)?;
         result?;
         failed_run
+    }
+
+    #[test]
+    fn rustc_override_vars_are_named_in_the_refusal() {
+        assert!(rustc_overrides_set(|_| false).is_empty());
+        assert_eq!(rustc_overrides_set(|name| name == "RUSTC"), ["RUSTC"]);
+        assert_eq!(
+            rustc_overrides_set(|name| name == "CARGO_BUILD_RUSTC"),
+            ["CARGO_BUILD_RUSTC"]
+        );
+    }
+
+    #[test]
+    fn run_refuses_a_custom_rustc_before_running_anything() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for variable in ["RUSTC", "CARGO_BUILD_RUSTC"] {
+            let previous = std::env::var_os(variable);
+            // SAFETY: env mutation in this binary is serialized by `FAKE_RUSTC`.
+            unsafe { std::env::set_var(variable, "/nonexistent/wrapping-rustc") };
+            let directory = std::env::temp_dir().join(format!(
+                "cargo_no_alloc_rustc_override_{}_{variable}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory)?;
+            let original_directory = std::env::current_dir()?;
+            std::env::set_current_dir(&directory)?;
+            let result = run(strings(&["cargo-no-alloc", "--", "build"]));
+            std::env::set_current_dir(original_directory)?;
+            unsafe {
+                match previous {
+                    Some(previous) => std::env::set_var(variable, previous),
+                    None => std::env::remove_var(variable),
+                }
+            }
+            std::fs::remove_dir_all(directory)?;
+            let error = result.err().context("a custom rustc must be refused")?;
+            // The nonexistent path proves the refusal came before any probe
+            // tried to execute the substitute.
+            let message = error.to_string();
+            assert!(message.contains(variable), "{message}");
+            assert!(message.contains("owns its compiler"), "{message}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn build_target_values_parse_and_empty_ones_name_nothing() -> Result<()> {
+        assert_eq!(
+            parse_build_targets(r#""thumbv7em-none-eabihf""#)?,
+            ["thumbv7em-none-eabihf"]
+        );
+        assert_eq!(parse_build_targets(r#"["a","b"]"#)?, ["a", "b"]);
+        assert!(parse_build_targets(r#""""#)?.is_empty());
+        assert!(parse_build_targets("[]")?.is_empty());
+        assert!(parse_build_targets("3").is_err());
+        let message = build_target_rejection(&["arm-none".to_owned()]);
+        assert!(message.contains("`arm-none`"), "{message}");
+        assert!(message.contains("CARGO_BUILD_TARGET"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn reserved_env_keys_finds_only_checker_variables() -> Result<()> {
+        let json = r#"{"FOO":"1","NO_ALLOC_WARN_ONLY":"1","NO_ALLOC_FRAGMENT_DIR":{"value":"/x","force":true}}"#;
+        assert_eq!(
+            reserved_env_keys(json)?,
+            ["NO_ALLOC_FRAGMENT_DIR", "NO_ALLOC_WARN_ONLY"]
+        );
+        assert!(reserved_env_keys(r#"{"FOO":"1"}"#)?.is_empty());
+        assert!(reserved_env_keys("[]").is_err());
+        let message = reserved_env_rejection(&["NO_ALLOC_WARN_ONLY".to_owned()]);
+        assert!(message.contains("`NO_ALLOC_WARN_ONLY`"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn build_rustc_is_refused_not_warned_about() {
+        let message = build_rustc_rejection("\"./my-rustc\"");
+        assert!(message.contains("`build.rustc`"), "{message}");
+        assert!(message.contains("\"./my-rustc\""), "{message}");
+        assert!(message.contains("toolchain's own rustc"), "{message}");
+        assert!(!WRAPPER_CONFIG_KEYS.contains(&"build.rustc"));
+    }
+
+    #[test]
+    fn per_package_target_keys_are_found_in_the_package_table_only() -> Result<()> {
+        let manifest = "[package]\nname = \"a\"\ndefault-target = \"x\"\nforced-target = \"y\"\n";
+        assert_eq!(
+            per_package_target_keys(manifest)?,
+            ["default-target", "forced-target"]
+        );
+        assert!(per_package_target_keys("[package]\nname = \"a\"\n")?.is_empty());
+        // A same-named key elsewhere is not the package setting.
+        assert!(per_package_target_keys(
+            "[package]\nname = \"a\"\n[package.metadata]\ndefault-target = 1\n"
+        )?
+        .is_empty());
+        assert!(per_package_target_keys("[workspace]\nmembers = []\n")?.is_empty());
+        assert!(per_package_target_keys("not toml [").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_manifest_paths_lists_only_members() -> Result<()> {
+        let json = r#"{"workspace_members":["m 0.1.0 (path+file:///w/m)"],
+            "packages":[{"id":"m 0.1.0 (path+file:///w/m)","manifest_path":"/w/m/Cargo.toml"},
+                        {"id":"d 0.1.0 (path+file:///w/d)","manifest_path":"/w/d/Cargo.toml"}]}"#;
+        assert_eq!(
+            workspace_manifest_paths(json)?,
+            [PathBuf::from("/w/m/Cargo.toml")]
+        );
+        assert!(workspace_manifest_paths("{}").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn per_package_target_rejection_names_the_manifest_and_key() {
+        let message = per_package_target_rejection(&[(
+            "/w/app/Cargo.toml".to_owned(),
+            vec!["default-target"],
+        )]);
+        assert!(message.contains("`/w/app/Cargo.toml`"), "{message}");
+        assert!(message.contains("`default-target`"), "{message}");
     }
 
     #[test]

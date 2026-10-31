@@ -1,0 +1,15 @@
+cargo-features = ["per-package-target"]
+
+[workspace]
+
+[package]
+name = "package_default_target"
+version = "0.1.0"
+edition = "2024"
+default-target = "armv7-unknown-linux-gnueabihf"
+
+[dependencies]
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

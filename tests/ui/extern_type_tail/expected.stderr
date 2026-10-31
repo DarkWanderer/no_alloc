@@ -1,0 +1,13 @@
+error: no_alloc: this function has an unresolved call (projection into an extern-type tail: codegen computes its size with a `panic_nounwind` call)
+  --> src/main.rs:13:1
+   |
+13 | pub fn root(s: &S) -> *const Opaque {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: via `root`
+  --> src/main.rs:13:1
+   |
+13 | pub fn root(s: &S) -> *const Opaque {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `extern_type_tail` (bin "extern_type_tail") due to 1 previous error

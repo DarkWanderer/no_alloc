@@ -1,0 +1,16 @@
+[workspace]
+exclude = ["dep"]
+
+[package]
+name = "shared_app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shared_dep = { path = "dep" }
+
+[profile.dev]
+opt-level = 3
+# rustc's MIR inliner runs only without incremental compilation, so an ambient
+# setting would change which frames the verdict chain contains.
+incremental = false

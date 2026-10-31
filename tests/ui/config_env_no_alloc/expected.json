@@ -1,0 +1,7 @@
+{
+  "roots": [],
+  "selection_errors": [
+    "Cargo config `[env]` sets `NO_ALLOC_WARN_ONLY`, which the checker reserves for steering its own driver and would let the config change what is reported; remove the `NO_ALLOC_*` entries from the `[env]` table"
+  ],
+  "schema_version": 2
+}

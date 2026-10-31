@@ -1,0 +1,42 @@
+error: no_alloc: this function may reach the global allocator
+   --> dep/src/lib.rs:3:1
+    |
+  3 | pub fn process<T: Default>() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `shared_dep::process::<u32>`
+   --> dep/src/lib.rs:3:1
+    |
+  3 | pub fn process<T: Default>() -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<[u32; 1]>::new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/macros.rs:60:52
+    |
+ 60 |             $crate::intrinsics::write_box_via_move($crate::boxed::Box::new_uninit(), [$($x),+])
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: dep/src/lib.rs:4:21
+    |
+  4 |     let v: Vec<T> = vec![T::default()];
+    |                     ------------------ in this macro invocation
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:322:33
+    |
+322 |         unsafe { mem::transmute(box_new_uninit(<T as SizedTypeProperties>::LAYOUT)) }
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `shared_app` (bin "shared_app") due to 1 previous error

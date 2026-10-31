@@ -1,0 +1,7 @@
+{
+  "roots": [],
+  "selection_errors": [
+    "Cargo config sets `build.rustc` to \"./rustc\" (via `[build] rustc` or `--config`), but the checker compiles with the toolchain's own rustc, so the shipped build could differ from the checked one (extra `--cfg` flags, say); unset build.rustc"
+  ],
+  "schema_version": 2
+}

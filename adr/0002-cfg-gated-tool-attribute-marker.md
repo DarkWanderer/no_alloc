@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted, amended 2026-10-30.
 
 ## Context
 
@@ -30,6 +30,16 @@ annotated item unchanged, with one attribute prepended:
   surviving `#[no_alloc_tool::root]` is a valid (registered) tool attribute,
   inert to codegen, readable from `TyCtxt` via `codegen_fn_attrs` / HIR
   attribute queries.
+
+Amended 2026-10-30: the prepended attribute is now
+`#[cfg_attr(no_alloc_check, no_alloc_tool::root, rustc_no_mir_inline)]`.
+Without it, a marked generic root can be MIR-inlined into every caller, leaving
+no mono item and a `NotInstantiated` report, which counts as success. The
+driver additionally injects `-Zcrate-attr=feature(rustc_attrs)` and
+`-Zcrate-attr=allow(internal_features)` for it. It sits inside the same
+`cfg_attr`, so normal builds are unaffected; the checked build differs from the
+shipped one only in that the root is not MIR-inlined (see README, "Guarantee
+and limitations"). Pinned by `tests/ui/inlined_generic_root`.
 
 The tool namespace is `no_alloc_tool`, deliberately distinct from the crate
 public crate name `no_alloc_check`.

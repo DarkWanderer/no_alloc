@@ -1,0 +1,7 @@
+#!/bin/sh
+# A working substitute compiler: the real toolchain rustc plus an extra
+# `--cfg heap`. With `build.rustc` honoured, the shipped build takes the
+# allocating branch in `src/main.rs`; the checker's own build (toolchain rustc,
+# no such flag) would see only the clean one and report a false pass, so the
+# run must be refused instead.
+exec "$(rustc --print sysroot)/bin/rustc" "$@" --cfg heap

@@ -1,0 +1,32 @@
+{
+  "roots": [
+    {
+      "root": "extern_type_tail::root",
+      "instance": "root",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "root",
+            "instance": "root",
+            "span": null
+          }
+        ],
+        "reason": "projection into an extern-type tail: codegen computes its size with a `panic_nounwind` call"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "unwind",
+  "schema_version": 2
+}

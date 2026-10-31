@@ -53,7 +53,7 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     quote! {
-        #[cfg_attr(no_alloc_check, no_alloc_tool::root)]
+        #[cfg_attr(no_alloc_check, no_alloc_tool::root, rustc_no_mir_inline)]
         #tokens
     }
     .into()
