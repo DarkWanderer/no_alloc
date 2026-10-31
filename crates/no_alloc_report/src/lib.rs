@@ -3,10 +3,12 @@
 //! this logic is unit-testable on stable without a `TyCtxt` in scope.
 
 mod intrinsic_table;
+mod reject_reason;
 mod report;
 mod root_spec;
 
 pub use intrinsic_table::intrinsic_cannot_reach_allocator;
+pub use reject_reason::RejectReason;
 pub use report::{
     Environment, Frame, PanicStrategy, Report, ReportFragment, RootVerdict, Verdict,
     CURRENT_SCHEMA_VERSION,
