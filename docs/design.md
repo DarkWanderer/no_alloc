@@ -36,7 +36,7 @@ other compiler; `RUSTC`/`CARGO_BUILD_RUSTC`, a configured `build.rustc` or
 ambient immediate-abort without `--build-std`) persist a failing
 `report.json`; a malformed command line (e.g. `--root a,,b`) is an argument
 error that writes nothing. `--root` accepts a comma-separated list and may be
-repeated; see the README for the full option semantics. An
+repeated; see [`usage.md`](usage.md) for the full option semantics. An
 exclusive `target/no-alloc.lock` prevents concurrent checker runs in one
 workspace. Normal mode cleans workspace-member artifacts in the dedicated
 target; `--all-crates` cleans the complete checker target. This guarantees that
@@ -98,7 +98,7 @@ unwind control flow is not a call. Assertions pass only under a compiler-known
 non-unwinding panic strategy and otherwise reject. That "pass" is a scope
 exclusion, not a proof, and it is drawn by terminator shape: an explicit
 `panic!()` or `.unwrap()` is an ordinary `Call` terminator that remains in
-scope and rejects if unresolved (`README.md`, "Guarantee and limitations").
+scope and rejects if unresolved ([`guarantees.md`](guarantees.md)).
 Under `--immediate-abort`
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
 std with `-Cpanic=immediate-abort`, panic paths, including the lang item an

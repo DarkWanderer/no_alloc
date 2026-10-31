@@ -2,7 +2,7 @@
 //! allocates so far goes through `__rust_alloc_zeroed` (`Box::new`,
 //! `Vec::with_capacity`, ...) or `__rust_dealloc`. Plain `__rust_alloc`
 //! (the `ALLOCATOR` flag in `leaf.rs`) had no fixture at all, despite
-//! `README.md` naming all four flags. `std::alloc::alloc` is the direct,
+//! `docs/guarantees.md` naming all four flags. `std::alloc::alloc` is the direct,
 //! uninitialized entry point that hits it.
 
 use std::alloc::{alloc, Layout};

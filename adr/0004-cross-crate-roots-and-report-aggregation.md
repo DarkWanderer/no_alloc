@@ -32,7 +32,7 @@ specification cannot disappear silently — an unmatched one is reported as a
 selection error. This does not extend to `#[no_alloc]` markers themselves: in
 the default (non-`--all-crates`) invocation mode, a marker in a non-workspace
 dependency is never instrumented and never appears in the report at all,
-silently (see `README.md`'s `--all-crates` documentation).
+silently (see `docs/usage.md`'s `--all-crates` documentation).
 
 ### Upstream-shared generic instantiations (amended 2026-10-30)
 

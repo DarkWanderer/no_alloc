@@ -8,7 +8,7 @@
 //! `all_crates_flag_instruments_non_workspace_markers` test in `tests/ui.rs`
 //! re-runs it with `--all-crates` and asserts the marker *is* caught there
 //! (see ADR 0004's "This does not extend to `#[no_alloc]` markers
-//! themselves" consequence, and the README's `--all-crates` section).
+//! themselves" consequence, and `docs/usage.md`'s `--all-crates` section).
 
 fn main() {
     println!("{}", all_crates_dep::dep_allocates());

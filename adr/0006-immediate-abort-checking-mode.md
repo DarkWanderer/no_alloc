@@ -10,7 +10,7 @@ ADR 0003 places panic paths outside the guarantee: an `Assert` terminator
 under a non-unwinding panic strategy is not traversed, because it has no MIR
 callee, and the codegen-time call it lowers to (`panic_fmt`, the
 `#[panic_handler]`, which with `std` formats and prints — i.e. allocates) is
-never walked. That exclusion is stated in the README, and it is the honest
+never walked. That exclusion is stated in `docs/guarantees.md`, and it is the honest
 description of what plain `panic = "abort"` gives.
 
 It is also not enough to check any real code. A panic path is not only an

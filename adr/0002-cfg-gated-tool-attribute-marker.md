@@ -38,8 +38,7 @@ no mono item and a `NotInstantiated` report, which counts as success. The
 driver additionally injects `-Zcrate-attr=feature(rustc_attrs)` and
 `-Zcrate-attr=allow(internal_features)` for it. It sits inside the same
 `cfg_attr`, so normal builds are unaffected; the checked build differs from the
-shipped one only in that the root is not MIR-inlined (see README, "Guarantee
-and limitations"). Pinned by `tests/ui/inlined_generic_root`.
+shipped one only in that the root is not MIR-inlined (see `docs/guarantees.md`). Pinned by `tests/ui/inlined_generic_root`.
 
 The tool namespace is `no_alloc_tool`, deliberately distinct from the crate
 public crate name `no_alloc_check`.
@@ -52,7 +51,7 @@ public crate name `no_alloc_check`.
   normally.
 - Users must silence `unexpected_cfgs` for `no_alloc_check` via
   `[lints.rust] unexpected_cfgs = { check-cfg = [...] }`. This is the one
-  piece of friction the design imposes; documented in the README.
+  piece of friction the design imposes; documented in the README's install section.
 - **Resolved at M2**: inert tool attributes *do* survive into cross-crate
   metadata at `nightly-2026-08-01`. `rustc_metadata`'s encoder
   (`should_encode_attrs` / `analyze_attr` in `rmeta/encoder.rs`) encodes
