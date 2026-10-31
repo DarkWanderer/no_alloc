@@ -52,6 +52,8 @@ const REQUIRED_FLAGS: &[&str] = &[
     "-Zcrate-attr=feature(register_tool)",
     "-Zcrate-attr=register_tool(no_alloc_tool)",
     "-Zalways-encode-mir",
+    "-Zcrate-attr=feature(rustc_attrs)",
+    "-Zcrate-attr=allow(internal_features)",
 ];
 
 struct NoAllocCallbacks;
@@ -151,6 +153,33 @@ impl Callbacks for NoAllocCallbacks {
     }
 }
 
+/// Fails unless `injected` (argv[1], the rustc Cargo was asked to run) is the
+/// `NO_ALLOC_EXPECTED_RUSTC` that `cargo-no-alloc` validated. Compared after
+/// canonicalization so a symlinked spelling of the same file is accepted; a
+/// missing variable fails closed, since then nothing vouches for the path.
+fn verify_injected_rustc(injected: &str) -> Result<(), String> {
+    let expected = std::env::var_os("NO_ALLOC_EXPECTED_RUSTC").ok_or_else(|| {
+        format!(
+            "cargo passed `{injected}` as rustc but NO_ALLOC_EXPECTED_RUSTC is unset; \
+             run the driver through `cargo no-alloc`"
+        )
+    })?;
+    let canonical = |path: &std::ffi::OsStr| {
+        std::fs::canonicalize(path)
+            .map_err(|error| format!("cannot resolve rustc path {path:?}: {error}"))
+    };
+    let (injected_real, expected_real) = (canonical(injected.as_ref())?, canonical(&expected)?);
+    if injected_real == expected_real {
+        Ok(())
+    } else {
+        Err(format!(
+            "cargo invoked `{injected}` as rustc, but the checker validated {expected:?}; a \
+             custom RUSTC / build.rustc cannot be honoured because the driver compiles with \
+             its own rustc"
+        ))
+    }
+}
+
 fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -172,6 +201,16 @@ fn main() -> std::process::ExitCode {
     // real-rustc path so `run_compiler` sees a normal rustc argv. When
     // invoked directly as `RUSTC=no-alloc-driver` there is no such element.
     if Path::new(&args[1]).file_stem().and_then(|s| s.to_str()) == Some("rustc") {
+        // The driver compiles with the rustc it links, ignoring this path, so
+        // accepting any `…/rustc` would let a substitute (a script adding
+        // `--cfg` flags) shape the shipped build while the checked one runs
+        // without it. `cargo-no-alloc` names the rustc it validated; anything
+        // else is refused rather than silently replaced.
+        if let Err(error) = verify_injected_rustc(&args[1]) {
+            tracing::error!("{error}");
+            eprintln!("error: no_alloc: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
         args.remove(1);
     }
 

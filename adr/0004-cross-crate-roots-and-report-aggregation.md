@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted, amended 2026-10-30.
 
 ## Context
 
@@ -33,3 +33,22 @@ selection error. This does not extend to `#[no_alloc]` markers themselves: in
 the default (non-`--all-crates`) invocation mode, a marker in a non-workspace
 dependency is never instrumented and never appears in the report at all,
 silently (see `README.md`'s `--all-crates` documentation).
+
+### Upstream-shared generic instantiations (amended 2026-10-30)
+
+Under `-Zshare-generics` (default at opt-level 0, and always for
+`#[inline(never)]`), a generic instantiation an upstream crate already emitted
+is linked to rather than codegened locally, so it is absent from the local
+`collect_and_partition_mono_items` set. A marked generic root instantiated that
+way was silently never discovered in the default mode. `discover_upstream_shared`
+now walks from every local mono item through resolved callees (via the
+traversal's own `resolved_callees`, so both agree on what a call resolves to),
+entering only callees `should_codegen_locally` rejects, and adopts any marked
+*generic* root it meets. The restriction to generic roots keeps the rule above
+intact: a marked non-generic function in a non-workspace dependency still
+requires `--all-crates`. Pinned by `tests/ui/cross_crate_shared_generic`.
+
+The root marker also emits `rustc_no_mir_inline` (ADR 0002), because a marked
+generic root MIR-inlined into every caller has no mono item and would be
+reported `NotInstantiated`, which counts as success. `--root`-selected unmarked
+generic functions have no marker and remain exposed to this.

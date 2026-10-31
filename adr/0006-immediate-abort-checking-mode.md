@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-08-25, amended 2026-10-24.
+Accepted 2026-08-25, amended 2026-10-24 and 2026-10-30.
 
 ## Context
 
@@ -134,6 +134,19 @@ reported as a warning and neutralised for the run: the build blanks the wrapper
 variable it does not use and sets the other to the driver, and an empty
 variable disables only its own config key. The `RUSTC_WRAPPER` and
 `RUSTC_WORKSPACE_WRAPPER` environment variables are still refused.
+
+Amended 2026-10-30: the same treatment covers the compiler and target. The
+driver links its own rustc and ignores the binary Cargo passes it, so a
+substitute `rustc` would shape the shipped build and not the checked one.
+`RUSTC` and `CARGO_BUILD_RUSTC` are refused; `build.rustc` is warned about and
+overridden, because the build is handed the `PATH`-resolved, validated `rustc`
+as `RUSTC`; and the driver fails unless its argv[1] is that path
+(`NO_ALLOC_EXPECTED_RUSTC`). A configured `build.target` is refused, since the
+checker always builds `--target <host>`. Cargo's `[env]` table fills any
+variable a spawned process leaves unset, so `[env]` keys starting `NO_ALLOC_`
+are refused and `NO_ALLOC_WARN_ONLY` is now always set explicitly (`1` or `0`)
+rather than removed. Pinned by `config_build_rustc`, `config_build_target` and
+`config_env_no_alloc`.
 A strategy chosen by a manifest or config *profile* is still seen only by the
 post-build check.
 
@@ -187,14 +200,16 @@ used a weaker, unproven carve-out that the "no carve-out" guarantee above
 promised to eliminate. It has not: `unwind` is the *strictest* of the three
 panic strategies as far as this traversal is concerned. Its `Assert`
 handling is `TerminatorKind::Assert { .. } if tcx.sess.panic_strategy().unwinds() => Unresolved(..)`
-— a hard rejection, never the `Edge::None` carve-out `abort` and
-`immediate-abort` both give that terminator. So a host root that reaches a
+— a hard rejection, never the `Edge::None` carve-out plain `abort` gives that
+terminator (under `immediate-abort` it is traversed into the panic lang item,
+per the 2026-10-21 amendment to ADR 0003). So a host root that reaches a
 `Pass` under `unwind` has been proven not to reach *any* assert-adjacent
 panic machinery at all, which is at least as strong a claim as a `Pass`
 under either other strategy, never weaker. The remaining terminals —
 `UnwindResume`, `UnwindTerminate`, `Unreachable` — are `Edge::None`
 unconditionally in `classify_terminator`, with no strategy check at all
-(ADR 0003); that scope exclusion is identical in every mode, including the
+(ADR 0003; `Unreachable` lowers to no code, so only the other two are a scope
+exclusion); that scope exclusion is identical in every mode, including the
 target crate's own `--immediate-abort`-checked code, so a host root reaching
 one is not weaker than a target root reaching the same terminator under
 immediate-abort — it is the same, pre-existing, documented exclusion.

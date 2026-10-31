@@ -1,0 +1,4 @@
+# Cargo fills unset variables of the driver's environment from `[env]`, so this
+# would turn the failure below into a warning. The run is refused instead.
+[env]
+NO_ALLOC_WARN_ONLY = "1"

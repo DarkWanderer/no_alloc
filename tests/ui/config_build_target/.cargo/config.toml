@@ -1,0 +1,4 @@
+# The checker always builds for the host; a configured target would be dropped
+# silently and `cfg(target_...)` code the shipped build compiles never checked.
+[build]
+target = "thumbv7em-none-eabihf"

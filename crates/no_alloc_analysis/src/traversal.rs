@@ -1,6 +1,8 @@
 //! The production DFS over the exhaustively classified MIR terminator table,
-//! memoized via a flat `HashSet<Instance<'tcx>>` (this is what
-//! makes the recursive-no-alloc-fn case terminate).
+//! memoized via a flat set keyed by `(Instance<'tcx>, bool)`, the flag being
+//! whether the caller is codegened locally (ADR 0005), so one instance can
+//! carry two verdicts; this is what makes the recursive-no-alloc-fn case
+//! terminate.
 //!
 //! **Violation takes priority over rejection within one function.** A
 //! single function body routinely has several sequential `Call` terminators
@@ -36,7 +38,10 @@
 
 use crate::leaf::allocates;
 use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
-use rustc_middle::mir::{Body, Rvalue, StatementKind, TerminatorKind};
+use rustc_middle::mir::visit::{PlaceContext, Visitor};
+use rustc_middle::mir::{
+    Body, Location, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
+};
 use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
@@ -197,6 +202,14 @@ fn visit<'tcx>(
     let typing_env = ty::TypingEnv::fully_monomorphized();
 
     let mut pending_reject: Option<Finding<'tcx>> = None;
+
+    // A place projection can lower to a hidden call that no MIR terminator
+    // names, so it is audited over the whole body rather than per edge.
+    // Recorded as a rejection, not returned, so a real allocator violation
+    // elsewhere in this body still takes priority.
+    if let Some(reason) = extern_tail_projection(tcx, instance, typing_env, body) {
+        pending_reject = Some(Finding::Rejected(stack.clone(), reason));
+    }
 
     for bb in body.basic_blocks.iter() {
         let mut edges = classify_statements(&bb.statements);
@@ -370,6 +383,62 @@ fn classify_validity_assertion<'tcx>(
     ))
 }
 
+/// Codegen's `project_field` (`rustc_codegen_ssa/src/mir/place.rs`) computes
+/// the alignment of an unsized field at a non-zero offset with
+/// `size_of_val::size_and_align_of_dst`, whose `ty::Foreign` arm emits a call
+/// to the `panic_nounwind` lang item: a Rust call that exists in no MIR body,
+/// so the traversal would never see it. Mirroring the exact offset rule would
+/// mean depending on layout details, so any field projection whose type has
+/// an extern-type tail is rejected, whatever its offset (ADR 0003: reject,
+/// don't assume).
+fn extern_tail_projection<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
+    body: &Body<'tcx>,
+) -> Option<String> {
+    struct Finder<'tcx> {
+        tcx: TyCtxt<'tcx>,
+        instance: Instance<'tcx>,
+        typing_env: ty::TypingEnv<'tcx>,
+        found: bool,
+    }
+    impl<'tcx> Visitor<'tcx> for Finder<'tcx> {
+        fn visit_place(&mut self, place: &Place<'tcx>, _: PlaceContext, _: Location) {
+            for elem in place.projection.iter() {
+                let ProjectionElem::Field(_, field_ty) = elem else {
+                    continue;
+                };
+                let field_ty = self.instance.instantiate_mir_and_normalize_erasing_regions(
+                    self.tcx,
+                    self.typing_env,
+                    ty::EarlyBinder::bind(self.tcx, field_ty),
+                );
+                let tail = self.tcx.struct_tail_for_codegen(field_ty, self.typing_env);
+                if matches!(tail.kind(), ty::Foreign(_)) {
+                    self.found = true;
+                }
+            }
+        }
+    }
+    let mut finder = Finder {
+        tcx,
+        instance,
+        typing_env,
+        found: false,
+    };
+    finder.visit_body(body);
+    finder.found.then(|| {
+        "projection into an extern-type tail: codegen computes its size with a `panic_nounwind` call"
+            .to_string()
+    })
+}
+
+fn has_explicit_linkage(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
+    let attrs = tcx.codegen_fn_attrs(def_id);
+    attrs.linkage.is_some() || attrs.import_linkage.is_some()
+}
+
 const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
 
 /// Exhaustively classifies whether an instance has faithful MIR to traverse.
@@ -377,7 +446,7 @@ const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
 /// shims have synthesized MIR even when the item whose `DefId` they carry is
 /// bodiless. Future rustc variants intentionally fail this match at compile
 /// time until their lowering has been audited (ADR 0003).
-fn resolve_body<'tcx>(
+pub(crate) fn resolve_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<&'tcx Body<'tcx>, String> {
@@ -385,6 +454,14 @@ fn resolve_body<'tcx>(
         InstanceKind::Item(def_id) => {
             if tcx.is_foreign_item(def_id) || !tcx.is_mir_available(def_id) {
                 Err(NO_MIR_BODY.to_string())
+            } else if has_explicit_linkage(tcx, def_id) {
+                // `#[linkage = "weak"]` and friends: the MIR here is one
+                // candidate definition, but the linker may bind the symbol
+                // to a different one, so its MIR is not faithful evidence.
+                Err(
+                    "callee has explicit linkage; the linker may bind it to a different definition"
+                        .to_string(),
+                )
             } else {
                 Ok(tcx.instance_mir(instance.def))
             }
@@ -629,6 +706,37 @@ fn classify_terminator<'tcx>(
     }
 
     edges
+}
+
+/// The statically resolved callees of `instance`'s body, by exactly the edge
+/// rules `visit` applies (unresolved edges contribute nothing here; `visit`
+/// is what reports them). Root discovery uses it to follow calls into
+/// upstream-shared instantiations the local collector never lists, so the
+/// two cannot disagree about what a call resolves to.
+pub(crate) fn resolved_callees<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+) -> Vec<Instance<'tcx>> {
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    body.basic_blocks
+        .iter()
+        .flat_map(|bb| {
+            let terminator = bb.terminator();
+            classify_terminator(
+                tcx,
+                instance,
+                typing_env,
+                body,
+                &terminator.kind,
+                terminator.source_info.span,
+            )
+        })
+        .filter_map(|edge| match edge {
+            Edge::Resolved(callee, _) => Some(callee),
+            Edge::None | Edge::Unresolved(_) => None,
+        })
+        .collect()
 }
 
 /// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls

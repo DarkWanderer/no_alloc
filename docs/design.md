@@ -4,7 +4,8 @@
 
 - `no_alloc_check` is the stable-compatible proc macro. Its marker is inert
   unless the checker supplies `cfg(no_alloc_check)` and registers the
-  `no_alloc_tool` attribute namespace.
+  `no_alloc_tool` attribute namespace; under the cfg it also adds
+  `rustc_no_mir_inline` ([ADR 0002](../adr/0002-cfg-gated-tool-attribute-marker.md)).
 - `no_alloc_report` contains stable serde/report and root-spec logic.
 - `no_alloc_analysis` contains rustc-private root discovery and traversal.
 - `cargo-no-alloc` installs both `cargo-no-alloc` and `no-alloc-driver`.
@@ -24,7 +25,12 @@ injected rustc flags, so the checked crate's own manifest needs no
 nightly-only keys.
 
 The wrapper uses the executable named by `CARGO`, preserves existing Rust
-flags, and refuses to overwrite existing rustc-wrapper configuration. An
+flags, and ignores (with a warning) rustc-wrapper configuration, since the
+driver must be the only wrapper. It resolves `rustc` from `PATH`, hands that
+path to Cargo as `RUSTC`, and the driver refuses to run if its argv[1] is any
+other compiler; `RUSTC`/`CARGO_BUILD_RUSTC`, a configured `build.target`, and
+`NO_ALLOC_*` keys in Cargo's `[env]` table are refused
+([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)). An
 exclusive `target/no-alloc.lock` prevents concurrent checker runs in one
 workspace. Normal mode cleans workspace-member artifacts in the dedicated
 target; `--all-crates` cleans the complete checker target. This guarantees that
@@ -37,6 +43,11 @@ annotated function `Instance`s. This discovers generic dependency roots at the
 downstream crate where each concrete instantiation exists. Uncalled,
 non-generic local roots are seeded directly; uncalled generic definitions are
 reported as `NotInstantiated` unless another fragment contains an instance.
+Generic instantiations that an upstream crate emitted (share-generics) are
+absent from that set, so a second walk over resolved callees not codegened
+locally adopts marked generic roots found there
+([ADR 0004](../adr/0004-cross-crate-roots-and-report-aggregation.md)). `async fn`
+roots are selection errors.
 
 Every rustc process atomically writes a uniquely named report fragment. Each
 checked root records the `Environment` (panic strategy, opt-level,
@@ -49,13 +60,16 @@ rather than being silently relabelled. The wrapper merges fragments
 deterministically, removes duplicates and superseded `NotInstantiated`
 entries, validates every requested root across the complete build, and
 atomically writes `target/no-alloc/report.json`. Concurrent compiler processes
-never share an output filename.
+never share an output filename. A top-level `warnings` list (omitted when
+empty, merged as a sorted union) records non-failing conditions such as a run
+that checked zero roots.
 Report write failures are operational errors even under `--warn-only`.
 
 ## Traversal
 
 Traversal is per monomorphized `Instance`, with cycle detection keyed by the
-instance rather than `DefId`. Allocator leaf detection precedes MIR-availability
+instance (plus whether the caller is codegened locally, ADR 0005) rather than
+`DefId`. Allocator leaf detection precedes MIR-availability
 checks because allocator shims are declarations without ordinary MIR.
 
 Resolved calls, tail calls, compiler-generated shims, and required drop glue
@@ -66,7 +80,8 @@ virtual dispatch, MIR-less foreign calls, and inline assembly reject.
 Intrinsics are classified against the non-allocating intrinsic table in
 `no_alloc_report` rather than rejected wholesale
 ([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)); an intrinsic not
-in the table rejects, named. All edges in a body are considered; allocation
+in the table rejects, named. Callees with explicit linkage, and field
+projections into extern-type tails, also reject (ADR 0003). All edges in a body are considered; allocation
 violations take priority over rejections.
 
 The terminator classification is documented in

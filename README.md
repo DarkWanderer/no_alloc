@@ -60,8 +60,13 @@ By default only workspace members are instrumented (`RUSTC_WORKSPACE_WRAPPER`).
 A `#[no_alloc]` marker on a non-generic function in a registry or path
 dependency outside the workspace is therefore silently never analyzed — the
 function never appears in the report at all, which is different from an
-unmatched `--root` (reported as a selection error). Pass `--all-crates` to
-instrument every crate in the build (`RUSTC_WRAPPER`) instead.
+unmatched `--root` (reported as a selection error). A marked *generic*
+function is checked wherever a workspace crate's mono graph reaches an
+instantiation, including one a dependency already emitted and the workspace
+crate links to under share-generics
+([ADR 0004](adr/0004-cross-crate-roots-and-report-aggregation.md)). Pass
+`--all-crates` to instrument every crate in the build (`RUSTC_WRAPPER`)
+instead.
 
 Unless `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set, the checked build uses
 the `build.rustflags` / `target.<host>.rustflags` from your Cargo config, as a
@@ -70,11 +75,19 @@ the run is refused (put those flags in `RUSTFLAGS`). A `rustc-wrapper` or
 `rustc-workspace-wrapper` in Cargo config (or its `CARGO_BUILD_*` environment
 form) is ignored for the run with a warning, because the driver must be the
 only wrapper; the `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` environment
-variables are refused.
+variables are refused. The checker compiles with the `rustc` found on `PATH`,
+so `build.rustc` in config is likewise warned about and ignored, and the
+`RUSTC` and `CARGO_BUILD_RUSTC` variables are refused. A configured
+`build.target` (`[build] target`, `CARGO_BUILD_TARGET`, `--config`) is
+refused, since the checker always builds for the host. Keys starting
+`NO_ALLOC_` in Cargo's `[env]` table are refused.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is
-written to `target/no-alloc/report.json`. Each checked root carries a versioned
+written to `target/no-alloc/report.json`. Its `warnings` list (omitted when
+empty) holds conditions that leave the exit code at 0 but that a reader of the
+file must not mistake for a verified pass; today that is a run that checked
+zero roots. Each checked root carries a versioned
 `environment` block with its typed panic strategy, optimization and MIR
 optimization levels, target triple, rustc version, and the
 `--all-crates`/`--build-std` settings. These values matter to what was proven,
@@ -123,20 +136,20 @@ rejection ([ADR 0005](adr/0005-intrinsic-leaf-classification.md)).
 
 **The panic exclusion is drawn by terminator shape, not by whether a path
 panics.**
-`Unreachable`, `UnwindResume`, and `UnwindTerminate` have no MIR callee to
-follow, so the traversal treats them as terminal control flow rather than
-calls — but each one lowers to a real call during codegen (into the panic
-runtime's `panic_fmt`, a foreign `_Unwind_Resume`, or a nounwind panic-handler
-call) that the traversal never walks. An `Assert` terminator (the implicit
-checks inserted for array bounds, arithmetic overflow, and similar cases) is
-allowed only under a non-unwinding panic strategy (`panic=abort`), and that is *not*
-because the panic runtime is unreachable there: a failing assertion under
-plain `panic=abort` still calls `panic_fmt` and the `#[panic_handler]`
-(which, with `std`, formats and prints — i.e. allocates) before the process
-aborts. It is allowed because allocation reachable only through a panic, an
-unwind-terminate, or an unwind-resume path is out of scope for this
-terminator is out of scope for this guarantee, not because that allocation
-has been ruled out. An explicit `panic!()`, `.unwrap()`, or `.expect()` has a
+`UnwindResume` and `UnwindTerminate` have no MIR callee to follow, so the
+traversal treats them as terminal control flow rather than calls — but each
+lowers to a real call during codegen (a foreign `_Unwind_Resume`, or a
+nounwind panic-handler call) that the traversal never walks. `Unreachable`
+codegens to a bare LLVM `unreachable` and contains no code at all. An
+`Assert` terminator (the implicit checks inserted for array bounds,
+arithmetic overflow, and similar cases) is allowed only under a non-unwinding
+panic strategy (`panic=abort`), and that is *not* because the panic runtime
+is unreachable there: a failing assertion under plain `panic=abort` still
+calls `panic_fmt` and the `#[panic_handler]` (which, with `std`, formats and
+prints — i.e. allocates) before the process aborts. It is allowed because
+allocation reachable only through a panic, an unwind-terminate, or an
+unwind-resume path is out of scope for this guarantee, not because that
+allocation has been ruled out. An explicit `panic!()`, `.unwrap()`, or `.expect()` has a
 different MIR shape: it is an ordinary `Call` terminator and remains in scope,
 so an unresolved panic-runtime callee rejects even under `panic=abort`. Under
 `panic=unwind`, `Assert` is rejected outright instead, on the usual
@@ -183,8 +196,30 @@ checking real workloads.
 Cross-crate generic roots are checked at downstream monomorphization sites.
 Per-rustc fragments are merged deterministically, and unmatched or non-function
 `--root` specifications are reported rather than silently disappearing. A
-`#[no_alloc]` marker in a non-workspace dependency is a different case — see
-`--all-crates` above.
+`#[no_alloc]` marker on a non-generic function in a non-workspace dependency
+is a different case — see `--all-crates` above. `async fn` roots (marked or
+`--root`) are a selection error, since only the future constructor has MIR.
+
+**Further limitations, not closed by the checker:**
+
+- The guarantee is about the `__rust_alloc`-family entry points (the
+  allocator, deallocator, reallocator, and zeroed-allocator codegen
+  attributes). A direct method call on a user `#[global_allocator]` static's
+  `GlobalAlloc` impl, or on an allocator crate's API, is ordinary code and is
+  followed like any other call: it is a violation only if that code reaches
+  the entry points.
+- The checked build is not the shipped build. It uses the pinned nightly's
+  standard library and compiler, sets `--cfg no_alloc_check`, and the marker
+  adds `rustc_no_mir_inline` to roots. Code that differs under
+  `cfg(no_alloc_check)` or under another toolchain is checked as built here.
+- `--root` on an unmarked generic function can still be MIR-inlined into all
+  its callers and reported `NotInstantiated`, which counts as success. The
+  marker prevents this for marked roots.
+- A callee with explicit linkage (`#[linkage = "weak"]` and similar) is
+  rejected: the linker may bind the symbol to a different definition than the
+  MIR checked. A field projection into a type with an extern-type tail is
+  rejected too, because codegen emits a panic call for it that no MIR edge
+  names ([ADR 0003](adr/0003-reject-unresolved-edges.md)).
 
 See [`docs/design.md`](docs/design.md) and the [`adr/`](adr) directory for the
 design rationale and operational details.

@@ -1,0 +1,2 @@
+error: Cargo config sets `build.target` to `thumbv7em-none-eabihf` (via `[build] target`, `CARGO_BUILD_TARGET` or `--config`), but the checker owns its target and always builds for the host, so the shipped build's `cfg(target_...)` code would go unchecked; unset build.target / CARGO_BUILD_TARGET
+Error: this build's configuration cannot be checked faithfully; nothing was built
