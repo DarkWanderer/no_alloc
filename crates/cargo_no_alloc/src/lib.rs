@@ -356,16 +356,35 @@ fn rustc_overrides_set(is_set: impl Fn(&str) -> bool) -> Vec<&'static str> {
         .collect()
 }
 
-fn reject_rustc_override() -> Result<()> {
+fn reject_rustc_override(report_path: &Path) -> Result<()> {
     let set = rustc_overrides_set(|name| env::var_os(name).is_some());
-    ensure!(
-        set.is_empty(),
-        "{} is set, but the checker compiles with the toolchain's own rustc and cannot honour a \
-         substitute: a custom rustc would shape the shipped build and not the checked one. \
-         Unset it; the checker owns its compiler",
-        set.join("/")
-    );
-    Ok(())
+    if set.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(
+        report_path,
+        format!(
+            "{} is set, but the checker compiles with the toolchain's own rustc and cannot honour a \
+             substitute: a custom rustc would shape the shipped build and not the checked one. \
+             Unset it; the checker owns its compiler",
+            set.join("/")
+        ),
+    ))
+}
+
+/// Records why the run is being refused in `report.json`, then returns the
+/// error to bail with. The stale report is already gone by the time any
+/// refusal can happen, so without this a consumer reading the file would find
+/// either nothing or, worse, nothing distinguishing "refused" from "never
+/// ran"; the persisted report is what keeps every refusal path consistent
+/// with the configuration refusals.
+fn refuse(report_path: &Path, reason: String) -> anyhow::Error {
+    match rejected_report(vec![reason.clone()]).write_to_file(report_path) {
+        Ok(()) => anyhow::anyhow!(reason),
+        Err(error) => anyhow::Error::new(error).context(format!(
+            "failed to record the refusal in report.json: {reason}"
+        )),
+    }
 }
 
 /// The `rustc` Cargo would find on `PATH`, as an absolute path. Not
@@ -577,10 +596,67 @@ fn taint_report_for_mixed_sysroot(report: &mut Report, mixed_sysroot: bool) {
 /// before the build ever ran.
 fn ambient_immediate_abort_needs_build_std(
     std_mode: StdMode,
-    encoded: Option<&str>,
-    plain: Option<&str>,
+    ambient: Option<&AmbientRustflags>,
 ) -> bool {
-    !std_mode.rebuilds_std() && declares_immediate_abort(encoded, plain)
+    !std_mode.rebuilds_std() && ambient.is_some_and(AmbientRustflags::selects_immediate_abort)
+}
+
+/// The Rust flags the caller's build would use, read once so the pre-flight
+/// guard and the build's own flags cannot disagree about them. `None` (at the
+/// use sites) means nothing is ambient.
+///
+/// Cargo's precedence is `CARGO_ENCODED_RUSTFLAGS`, then `RUSTFLAGS`, then
+/// configuration; the first one present (even if empty) ignores everything
+/// after it, so exactly one variant is ever in play.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AmbientRustflags {
+    /// `\x1f`-separated, exactly as Cargo reads it.
+    Encoded(String),
+    /// Whitespace-separated `RUSTFLAGS`.
+    Plain(String),
+    /// Imported from Cargo config, which only applies when neither variable
+    /// is set. Never empty: an empty import is "nothing ambient".
+    FromConfig(Vec<String>),
+}
+
+impl AmbientRustflags {
+    /// Reads the two variables' raw values. A non-UTF-8 value that is in
+    /// effect is an error rather than being lossily decoded: the flags would
+    /// then differ from what rustc sees, and the guard could miss a
+    /// `-Cpanic=immediate-abort` it was written to catch. A value Cargo
+    /// would ignore anyway (`RUSTFLAGS` under `CARGO_ENCODED_RUSTFLAGS`) is
+    /// not inspected.
+    fn from_env(encoded: Option<OsString>, plain: Option<OsString>) -> Result<Option<Self>> {
+        let text = |name: &str, value: OsString| {
+            value.into_string().map_err(|_| {
+                anyhow::anyhow!(
+                    "`{name}` is not valid UTF-8, so the checker cannot tell which Rust flags \
+                     the shipped build uses (for one, whether they select \
+                     `-Cpanic=immediate-abort`); set it to a UTF-8 value or unset it"
+                )
+            })
+        };
+        Ok(match (encoded, plain) {
+            (Some(encoded), _) => Some(Self::Encoded(text("CARGO_ENCODED_RUSTFLAGS", encoded)?)),
+            (None, Some(plain)) => Some(Self::Plain(text("RUSTFLAGS", plain)?)),
+            (None, None) => None,
+        })
+    }
+
+    fn from_config(flags: Vec<String>) -> Option<Self> {
+        (!flags.is_empty()).then_some(Self::FromConfig(flags))
+    }
+
+    fn selects_immediate_abort(&self) -> bool {
+        match self {
+            Self::Encoded(encoded) => declares_immediate_abort(Some(encoded), None),
+            Self::Plain(plain) => declares_immediate_abort(None, Some(plain)),
+            // Imported flags stand in for the encoded variable: they are
+            // what rustc would see, and `-Cpanic=immediate-abort` in config
+            // is as much an ambient selection as one in the environment.
+            Self::FromConfig(flags) => declares_immediate_abort(Some(&flags.join("\x1f")), None),
+        }
+    }
 }
 
 /// Config keys naming a program Cargo would run in front of (or instead of)
@@ -998,7 +1074,14 @@ fn configured_wrappers(cargo: &OsString, config_args: &[String]) -> Result<Vec<S
     Ok(found)
 }
 
-fn add_required_rustflags(command: &mut Command, immediate_abort: bool, imported: &[String]) {
+/// The `(variable, value)` the build must be given so the required flags (and
+/// the panic strategy, if asked for) are in effect on top of `ambient`.
+/// Pure: the caller applies it, and the same `ambient` already fed the
+/// pre-flight guard, so the two cannot see different flags.
+fn add_required_rustflags(
+    ambient: Option<&AmbientRustflags>,
+    immediate_abort: bool,
+) -> (&'static str, String) {
     // Two passes, and the order matters. The always-required flags are added
     // only when absent, so an inherited copy is left alone. The panic
     // strategy is then appended unconditionally, because `-Cpanic` is
@@ -1012,47 +1095,44 @@ fn add_required_rustflags(command: &mut Command, immediate_abort: bool, imported
     } else {
         &[]
     };
+    let push = |value: &mut String, separator: char, flag: &str| {
+        if !value.is_empty() {
+            value.push(separator);
+        }
+        value.push_str(flag);
+    };
     // Config flags are carried in the encoded variable, which has no
     // word-splitting, so an array entry containing a space survives intact.
-    // They are only a fallback: the environment, when set, is what Cargo
-    // would have used and config would have been ignored.
-    let imported_encoded = (!imported.is_empty() && env::var_os("RUSTFLAGS").is_none())
-        .then(|| OsString::from(imported.join("\x1f")));
-    if let Some(encoded) = env::var_os("CARGO_ENCODED_RUSTFLAGS").or(imported_encoded) {
-        let mut value = encoded.to_string_lossy().into_owned();
+    let encoded = match ambient {
+        Some(AmbientRustflags::Encoded(value)) => Some(value.clone()),
+        Some(AmbientRustflags::FromConfig(flags)) => Some(flags.join("\x1f")),
+        Some(AmbientRustflags::Plain(_)) | None => None,
+    };
+    if let Some(mut value) = encoded {
         let existing: HashSet<String> = value.split('\x1f').map(str::to_owned).collect();
-        let push = |flag: &str, value: &mut String| {
-            if !value.is_empty() {
-                value.push('\x1f');
-            }
-            value.push_str(flag);
-        };
         for flag in REQUIRED_RUSTFLAGS {
             if !existing.contains(*flag) {
-                push(flag, &mut value);
+                push(&mut value, '\x1f', flag);
             }
         }
         for flag in panic_strategy {
-            push(flag, &mut value);
+            push(&mut value, '\x1f', flag);
         }
-        command.env("CARGO_ENCODED_RUSTFLAGS", value);
+        ("CARGO_ENCODED_RUSTFLAGS", value)
     } else {
-        let mut value = env::var("RUSTFLAGS").unwrap_or_default();
-        let push = |flag: &str, value: &mut String| {
-            if !value.is_empty() {
-                value.push(' ');
-            }
-            value.push_str(flag);
+        let mut value = match ambient {
+            Some(AmbientRustflags::Plain(value)) => value.clone(),
+            _ => String::new(),
         };
         for flag in REQUIRED_RUSTFLAGS {
             if !value.split_whitespace().any(|existing| existing == *flag) {
-                push(flag, &mut value);
+                push(&mut value, ' ', flag);
             }
         }
         for flag in panic_strategy {
-            push(flag, &mut value);
+            push(&mut value, ' ', flag);
         }
-        command.env("RUSTFLAGS", value);
+        ("RUSTFLAGS", value)
     }
 }
 
@@ -1211,6 +1291,17 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         }
         _ => {}
     }
+    // Every refusal from here on goes through `refuse`, which needs only the
+    // report path (known right above, once the lock is held and the stale
+    // report is gone), so even the earliest one leaves a failing report.
+    //
+    // Read before anything else so the flags are decoded once and every later
+    // use sees the same value; a non-UTF-8 one is a refusal, not a lossy guess.
+    let env_rustflags = AmbientRustflags::from_env(
+        env::var_os("CARGO_ENCODED_RUSTFLAGS"),
+        env::var_os("RUSTFLAGS"),
+    )
+    .map_err(|error| refuse(&report_path, error.to_string()))?;
     // Checked before anything else touches Cargo: a project pinned to the
     // wrong toolchain otherwise fails much further down, in
     // `sysroot_lib_dir`, as a raw dynamic-linker error instead of this
@@ -1219,7 +1310,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // The override check comes first so that no probe ever runs a substitute
     // compiler, and the probes below use the same resolved path the build is
     // handed.
-    reject_rustc_override()?;
+    reject_rustc_override(&report_path)?;
     let rustc_path = resolve_rustc()?;
     let rustc = rustc_path
         .to_str()
@@ -1230,9 +1321,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         inv.warn_only = true;
     }
     if env::var_os("RUSTC_WRAPPER").is_some() || env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some() {
-        bail!(
+        return Err(refuse(
+            &report_path,
             "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc"
-        );
+                .to_owned(),
+        ));
     }
     if let Ok(existing) = env::var("NO_ALLOC_ROOTS") {
         inv.roots.extend(parse_root_spec(&existing));
@@ -1292,19 +1385,17 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             rejections.push(reserved_env_rejection(&keys));
         }
     }
-    let mut imported_rustflags = Vec::new();
     // Cargo ignores config rustflags entirely once either variable is set
     // (even to an empty value), so the caller's environment is already what
     // plain `cargo build` would use and there is nothing to import.
-    let env_rustflags =
-        env::var("CARGO_ENCODED_RUSTFLAGS").is_ok() || env::var("RUSTFLAGS").is_ok();
-    if !env_rustflags {
+    let mut ambient = env_rustflags;
+    if ambient.is_none() {
         match config_rustflags(&cargo, &config_args, &host)? {
             ConfigRustflags::Import(flags) => {
                 if !flags.is_empty() {
                     tracing::info!(?flags, "importing rustflags from Cargo config");
                 }
-                imported_rustflags = flags;
+                ambient = AmbientRustflags::from_config(flags);
             }
             ConfigRustflags::Unsupported(reason) => rejections.push(reason),
         }
@@ -1332,26 +1423,19 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // `--build-std` rebuilds the sysroot under the same inherited flags and
     // is exactly as coherent as the flag, which is what the post-build
     // check's own `mixed_sysroot_panic_strategy` already agrees is fine.
-    // Gating on `inv.immediate_abort` here instead rejected that legitimate
-    // combination before ever reaching the build.
-    // Imported config flags stand in for the encoded variable here: they are
-    // what rustc would see, and `-Cpanic=immediate-abort` in config is as
-    // much an ambient selection as one in the environment.
-    let ambient_encoded = env::var("CARGO_ENCODED_RUSTFLAGS")
-        .ok()
-        .or_else(|| (!imported_rustflags.is_empty()).then(|| imported_rustflags.join("\x1f")));
-    ensure!(
-        !ambient_immediate_abort_needs_build_std(
-            inv.std_mode,
-            ambient_encoded.as_deref(),
-            env::var("RUSTFLAGS").ok().as_deref(),
-        ),
-        "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
-         `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
-         report says it means if the standard library is rebuilt with it too; pass \
-         `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
-         strategy yourself)"
-    );
+    // Gating on the immediate-abort option here instead rejected that
+    // legitimate combination before ever reaching the build.
+    if ambient_immediate_abort_needs_build_std(inv.std_mode, ambient.as_ref()) {
+        return Err(refuse(
+            &report_path,
+            "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
+             `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
+             report says it means if the standard library is rebuilt with it too; pass \
+             `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
+             strategy yourself)"
+                .to_owned(),
+        ));
+    }
 
     clear_checker_artifacts(&cargo, &inv, &target_dir, &host, &rustc_path)?;
     if fragment_dir.exists() {
@@ -1376,11 +1460,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         command.arg("-Zbuild-std");
     }
     command.args(&inv.cargo_args[split..]);
-    add_required_rustflags(
-        &mut command,
-        inv.std_mode.selects_immediate_abort(),
-        &imported_rustflags,
-    );
+    let (rustflags_var, rustflags) =
+        add_required_rustflags(ambient.as_ref(), inv.std_mode.selects_immediate_abort());
+    command.env(rustflags_var, rustflags);
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
     command.env(
         "NO_ALLOC_ROOTS",
@@ -1811,31 +1893,10 @@ mod tests {
         // `-Cpanic` is last-wins, so "already present somewhere" is not the
         // same as "in effect": an inherited pair ending in `-Cpanic=unwind`
         // must not stop the checker's own copy from being appended last.
-        let flags = |encoded: &str| {
-            // SAFETY: see `orchestration_runs_with_fake_cargo_and_rustc` —
-            // env mutation in this binary is serialized by `FAKE_RUSTC`.
-            let _guard = FAKE_RUSTC
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let previous = std::env::var_os("CARGO_ENCODED_RUSTFLAGS");
-            unsafe { std::env::set_var("CARGO_ENCODED_RUSTFLAGS", encoded) };
-            let mut command = Command::new("true");
-            add_required_rustflags(&mut command, true, &[]);
-            let value = command
-                .get_envs()
-                .find(|(name, _)| *name == "CARGO_ENCODED_RUSTFLAGS")
-                .and_then(|(_, value)| value)
-                .map(|value| value.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            unsafe {
-                match previous {
-                    Some(previous) => std::env::set_var("CARGO_ENCODED_RUSTFLAGS", previous),
-                    None => std::env::remove_var("CARGO_ENCODED_RUSTFLAGS"),
-                }
-            }
-            value
-        };
-        let outvoted = flags("-Cpanic=immediate-abort\u{1f}-Cpanic=unwind");
+        let ambient =
+            AmbientRustflags::Encoded("-Cpanic=immediate-abort\u{1f}-Cpanic=unwind".into());
+        let (name, outvoted) = add_required_rustflags(Some(&ambient), true);
+        assert_eq!(name, "CARGO_ENCODED_RUSTFLAGS");
         let last = outvoted.split('\u{1f}').next_back().unwrap_or_default();
         assert_eq!(last, "-Cpanic=immediate-abort", "in `{outvoted}`");
     }
@@ -1956,22 +2017,99 @@ mod tests {
         // The exact case this round found: `--build-std` alone, no
         // `--immediate-abort`, ambient flags already selecting the
         // strategy — coherent, and must not be pre-flight rejected.
+        let ambient = AmbientRustflags::Encoded("-Cpanic=immediate-abort".into());
         assert!(!ambient_immediate_abort_needs_build_std(
             StdMode::BuildStd,
-            Some("-Cpanic=immediate-abort"),
-            None
+            Some(&ambient)
         ));
         // Neither flag: still a real mix, still rejected.
         assert!(ambient_immediate_abort_needs_build_std(
             StdMode::Precompiled,
-            Some("-Cpanic=immediate-abort"),
-            None
+            Some(&ambient)
         ));
         // No ambient strategy at all: nothing to reject regardless of
         // `--build-std`.
         for mode in [StdMode::Precompiled, StdMode::BuildStd] {
-            assert!(!ambient_immediate_abort_needs_build_std(mode, None, None));
+            assert!(!ambient_immediate_abort_needs_build_std(mode, None));
         }
+    }
+
+    /// The guard and the build read one value, whichever source supplied it:
+    /// each variant must both trip the guard and have its flags carried into
+    /// the variable the build is given.
+    #[test]
+    fn every_ambient_source_feeds_the_guard_and_the_build_alike() {
+        let selecting = [
+            AmbientRustflags::Encoded("--cfg=x\u{1f}-Cpanic=immediate-abort".into()),
+            AmbientRustflags::Plain("--cfg=x -Cpanic=immediate-abort".into()),
+            AmbientRustflags::FromConfig(strings(&["--cfg=x", "-C", "panic=immediate-abort"])),
+        ];
+        for ambient in &selecting {
+            assert!(
+                ambient_immediate_abort_needs_build_std(StdMode::Precompiled, Some(ambient)),
+                "{ambient:?}"
+            );
+            let (name, value) = add_required_rustflags(Some(ambient), false);
+            let expected = if matches!(ambient, AmbientRustflags::Plain(_)) {
+                "RUSTFLAGS"
+            } else {
+                "CARGO_ENCODED_RUSTFLAGS"
+            };
+            assert_eq!(name, expected, "{ambient:?}");
+            assert!(value.contains("immediate-abort"), "{ambient:?}: {value}");
+        }
+    }
+
+    #[test]
+    fn config_rustflags_only_count_when_non_empty() {
+        assert_eq!(AmbientRustflags::from_config(Vec::new()), None);
+        assert_eq!(
+            AmbientRustflags::from_config(strings(&["--cfg=x"])),
+            Some(AmbientRustflags::FromConfig(strings(&["--cfg=x"])))
+        );
+    }
+
+    #[test]
+    fn encoded_rustflags_outrank_plain_ones_as_in_cargo() -> Result<()> {
+        let os = |text: &str| Some(OsString::from(text));
+        assert_eq!(
+            AmbientRustflags::from_env(os("a"), os("b"))?,
+            Some(AmbientRustflags::Encoded("a".into()))
+        );
+        assert_eq!(
+            AmbientRustflags::from_env(None, os("b"))?,
+            Some(AmbientRustflags::Plain("b".into()))
+        );
+        // Set-but-empty still shadows config, so it is not "nothing ambient".
+        assert_eq!(
+            AmbientRustflags::from_env(None, os(""))?,
+            Some(AmbientRustflags::Plain(String::new()))
+        );
+        assert_eq!(AmbientRustflags::from_env(None, None)?, None);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_rustflags_are_an_error_not_a_lossy_guess() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = || Some(OsString::from_vec(vec![b'-', b'C', 0xff, 0xfe]));
+        for (encoded, plain, variable) in [
+            (invalid(), None, "CARGO_ENCODED_RUSTFLAGS"),
+            (None, invalid(), "RUSTFLAGS"),
+        ] {
+            let error = AmbientRustflags::from_env(encoded, plain)
+                .expect_err("a non-UTF-8 value in effect must be refused");
+            let message = error.to_string();
+            assert!(message.contains(variable), "{message}");
+            assert!(message.contains("not valid UTF-8"), "{message}");
+        }
+        // Cargo ignores `RUSTFLAGS` under the encoded variable, so a value it
+        // would never read is no reason to refuse.
+        assert_eq!(
+            AmbientRustflags::from_env(Some("ok".into()), invalid()).ok(),
+            Some(Some(AmbientRustflags::Encoded("ok".into())))
+        );
     }
 
     #[test]
@@ -2046,48 +2184,11 @@ mod tests {
 
     #[test]
     fn immediate_abort_rustflags_are_added_only_when_asked_for() {
-        // `add_required_rustflags` reads the ambient RUSTFLAGS/
-        // CARGO_ENCODED_RUSTFLAGS directly, so this needs the same isolation
-        // `immediate_abort_flag_is_appended_even_when_an_equal_flag_is_inherited`
-        // does: without it, either that test's transient mutation or a
-        // developer's own shell exporting `-Cpanic=immediate-abort` could
-        // leak in and fail the `without` assertions spuriously.
-        let _guard = FAKE_RUSTC
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let saved = [
-            ("RUSTFLAGS", std::env::var_os("RUSTFLAGS")),
-            (
-                "CARGO_ENCODED_RUSTFLAGS",
-                std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
-            ),
-        ];
-        // SAFETY: guarded by `FAKE_RUSTC`, restored before returning.
-        unsafe {
-            std::env::remove_var("RUSTFLAGS");
-            std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
-        }
-        let flags = |immediate_abort| {
-            let mut command = Command::new("true");
-            add_required_rustflags(&mut command, immediate_abort, &[]);
-            command
-                .get_envs()
-                .find(|(name, _)| *name == "RUSTFLAGS" || *name == "CARGO_ENCODED_RUSTFLAGS")
-                .and_then(|(_, value)| value)
-                .map(|value| value.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        let without = flags(false);
-        let with = flags(true);
-        // SAFETY: same guard as above.
-        unsafe {
-            for (name, value) in saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
+        // Nothing ambient: the function no longer reads the environment, so a
+        // developer's own exported `-Cpanic=immediate-abort` cannot leak in.
+        let (name, without) = add_required_rustflags(None, false);
+        assert_eq!(name, "RUSTFLAGS");
+        let (_, with) = add_required_rustflags(None, true);
         for flag in IMMEDIATE_ABORT_RUSTFLAGS {
             assert!(!without.contains(flag), "unasked-for `{flag}`");
             assert!(with.contains(flag), "missing `{flag}`");
@@ -2647,33 +2748,90 @@ if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for variable in ["RUSTC", "CARGO_BUILD_RUSTC"] {
-            let previous = std::env::var_os(variable);
-            // SAFETY: env mutation in this binary is serialized by `FAKE_RUSTC`.
-            unsafe { std::env::set_var(variable, "/nonexistent/wrapping-rustc") };
-            let directory = std::env::temp_dir().join(format!(
-                "cargo_no_alloc_rustc_override_{}_{variable}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&directory)?;
-            let original_directory = std::env::current_dir()?;
-            std::env::set_current_dir(&directory)?;
-            let result = run(strings(&["cargo-no-alloc", "--", "build"]));
-            std::env::set_current_dir(original_directory)?;
-            unsafe {
-                match previous {
-                    Some(previous) => std::env::set_var(variable, previous),
-                    None => std::env::remove_var(variable),
-                }
-            }
-            std::fs::remove_dir_all(directory)?;
+            let (result, report) = run_refused(
+                variable,
+                &[(variable, OsString::from("/nonexistent/wrapping-rustc"))],
+            )?;
             let error = result.err().context("a custom rustc must be refused")?;
             // The nonexistent path proves the refusal came before any probe
             // tried to execute the substitute.
             let message = error.to_string();
             assert!(message.contains(variable), "{message}");
             assert!(message.contains("owns its compiler"), "{message}");
+            // Persisted too, and in place of the stale passing report that
+            // was on disk when the run started.
+            assert!(!report.is_success(), "{report:?}");
+            assert_eq!(report.selection_errors, [message]);
         }
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_refuses_non_utf8_rustflags_and_records_it() -> Result<()> {
+        use std::os::unix::ffi::OsStringExt;
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (result, report) = run_refused(
+            "non_utf8_flags",
+            &[(
+                "CARGO_ENCODED_RUSTFLAGS",
+                OsString::from_vec(vec![b'-', 0xff]),
+            )],
+        )?;
+        let message = result
+            .err()
+            .context("a non-UTF-8 value must be refused")?
+            .to_string();
+        assert!(message.contains("not valid UTF-8"), "{message}");
+        assert!(!report.is_success(), "{report:?}");
+        assert_eq!(report.selection_errors, [message]);
+        Ok(())
+    }
+
+    /// Runs `cargo no-alloc -- build` in a fresh directory that already holds
+    /// a stale *passing* `report.json`, with `env` set, and returns the run's
+    /// result together with the report left on disk. The caller must hold
+    /// `FAKE_RUSTC`: the environment and cwd are process-wide.
+    fn run_refused(label: &str, env: &[(&str, OsString)]) -> Result<(Result<()>, Report)> {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo_no_alloc_refused_{}_{label}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(directory.join("target/no-alloc"))?;
+        std::fs::write(
+            directory.join("target/no-alloc/report.json"),
+            r#"{"roots":[]}"#,
+        )?;
+        let originals: Vec<_> = env
+            .iter()
+            .map(|(name, _)| ((*name).to_owned(), std::env::var_os(name)))
+            .collect();
+        let original_directory = std::env::current_dir()?;
+        // SAFETY: callers hold `FAKE_RUSTC`, which serializes every test that
+        // touches the process environment or current directory.
+        unsafe {
+            for (name, value) in env {
+                std::env::set_var(name, value);
+            }
+        }
+        std::env::set_current_dir(&directory)?;
+        let result = run(strings(&["cargo-no-alloc", "--", "build"]));
+        std::env::set_current_dir(original_directory)?;
+        unsafe {
+            for (name, value) in originals {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        let report = serde_json::from_reader(std::fs::File::open(
+            directory.join("target/no-alloc/report.json"),
+        )?)?;
+        std::fs::remove_dir_all(directory)?;
+        Ok((result, report))
     }
 
     #[test]
@@ -2909,45 +3067,21 @@ if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
 
     #[test]
     fn imported_config_flags_come_first_and_the_panic_strategy_stays_last() {
-        let _guard = FAKE_RUSTC
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let saved = [
-            ("RUSTFLAGS", std::env::var_os("RUSTFLAGS")),
-            (
-                "CARGO_ENCODED_RUSTFLAGS",
-                std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
-            ),
-        ];
-        // SAFETY: guarded by `FAKE_RUSTC`, restored before returning.
-        unsafe {
-            std::env::remove_var("RUSTFLAGS");
-            std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
-        }
         let imported = strings(&["--cfg", "heap", "-Cllvm-args=a b"]);
-        let flags_for = |imported: &[String]| {
-            let mut command = Command::new("true");
-            add_required_rustflags(&mut command, true, imported);
-            command
-                .get_envs()
-                .find(|(name, _)| *name == "CARGO_ENCODED_RUSTFLAGS")
-                .and_then(|(_, value)| value)
-                .map(|value| value.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        let merged = flags_for(&imported);
+        let (name, merged) = add_required_rustflags(
+            AmbientRustflags::from_config(imported.clone()).as_ref(),
+            true,
+        );
+        assert_eq!(name, "CARGO_ENCODED_RUSTFLAGS");
         // With the user's own variable set, config is not consulted by Cargo,
-        // so imported flags must not be mixed in.
-        unsafe { std::env::set_var("RUSTFLAGS", "--cfg user") };
-        let shadowed = command_rustflags_var(&imported);
-        unsafe {
-            for (name, value) in saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
+        // so imported flags can never reach the build: `run` only imports
+        // when `from_env` found nothing, and the variable's own value is what
+        // the build is given.
+        let user = AmbientRustflags::from_env(None, Some("--cfg user".into()))
+            .ok()
+            .flatten();
+        let (shadowed_name, shadowed) = add_required_rustflags(user.as_ref(), false);
+        assert_eq!(shadowed_name, "RUSTFLAGS");
         let parts: Vec<&str> = merged.split('\x1f').collect();
         assert_eq!(
             &parts[..3],
@@ -2962,17 +3096,5 @@ if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
         );
         assert!(!shadowed.contains("heap"), "{shadowed}");
         assert!(shadowed.starts_with("--cfg user"), "{shadowed}");
-    }
-
-    /// The `RUSTFLAGS` value `add_required_rustflags` exports.
-    fn command_rustflags_var(imported: &[String]) -> String {
-        let mut command = Command::new("true");
-        add_required_rustflags(&mut command, false, imported);
-        command
-            .get_envs()
-            .find(|(name, _)| *name == "RUSTFLAGS")
-            .and_then(|(_, value)| value)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default()
     }
 }

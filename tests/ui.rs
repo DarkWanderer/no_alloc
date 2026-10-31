@@ -16,7 +16,10 @@
 //!
 //! A case may also carry a `checker-args` file — checker flags, one per
 //! line, prepended to the invocation — for a fixture whose subject is a
-//! non-default checker configuration (see `iterator_immediate_abort`).
+//! non-default checker configuration (see `iterator_immediate_abort`), and a
+//! `checker-env` file — `NAME=value` per line, set after the harness's own
+//! scrubbing — for a fixture whose subject is a refusal caused by the
+//! caller's environment (see `refused_rustc_wrapper`).
 //!
 //! Requires `cargo build --workspace` to have already produced
 //! `cargo-no-alloc`/`no-alloc-driver` in `target/<profile>/` —
@@ -196,6 +199,26 @@ fn checker_args(case_dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Per-case environment, `NAME=value` per line, from an optional
+/// `checker-env` file. For a case whose subject is a refusal caused by the
+/// caller's environment (`RUSTC_WRAPPER`, ambient `RUSTFLAGS`): everything the
+/// harness scrubs is scrubbed first, then these are set.
+fn checker_env(case_dir: &Path) -> Vec<(String, String)> {
+    let Ok(contents) = fs::read_to_string(case_dir.join("checker-env")) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (name, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("checker-env line without `=`: {line}"));
+            (name.trim().to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
 fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
     let target_dir = case_dir.join("target/no-alloc");
     let _ = fs::remove_dir_all(&target_dir);
@@ -246,6 +269,9 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         // `CARGO_TERM_COLOR` (CI sets `always`, which would otherwise leak
         // ANSI escapes into the diagnostic and break every snapshot).
         .env("CARGO_TERM_COLOR", "never")
+        // Last, so a case that deliberately sets one of the variables scrubbed
+        // above (to exercise a refusal) is not undone by the scrub.
+        .envs(checker_env(case_dir))
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
     let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr), case_dir);

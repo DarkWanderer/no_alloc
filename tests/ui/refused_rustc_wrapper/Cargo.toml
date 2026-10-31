@@ -1,0 +1,6 @@
+[workspace]
+
+[package]
+name = "refused_rustc_wrapper"
+version = "0.1.0"
+edition = "2021"
