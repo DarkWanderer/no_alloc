@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--root` accepts a comma-separated list of paths and may be repeated; a
+  malformed list such as `a,,b` is an argument error.
+- A non-UTF-8 `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` is refused instead of
+  being decoded lossily.
+- Configuration refusals (rustc override, `RUSTC_WRAPPER`, ambient
+  immediate-abort without `--build-std`, non-UTF-8 flags) persist a failing
+  `report.json`; operational errors still write none.
 - Initial Linux release of the monomorphized no-allocation checker.
 - Stable-compatible `no_alloc_check::no_alloc` marker macro.
 - Conservative call/drop analysis with per-instance diagnostics and reports.

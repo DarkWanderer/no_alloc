@@ -16,17 +16,24 @@
 //!
 //! A case may also carry a `checker-args` file — checker flags, one per
 //! line, prepended to the invocation — for a fixture whose subject is a
-//! non-default checker configuration (see `iterator_immediate_abort`).
+//! non-default checker configuration (see `iterator_immediate_abort`), and a
+//! `checker-env` file — `NAME=value` per line, set after the harness's own
+//! scrubbing — for a fixture whose subject is a refusal caused by the
+//! caller's environment (see `refused_rustc_wrapper`).
 //!
 //! Requires `cargo build --workspace` to have already produced
-//! `cargo-no-alloc`/`no-alloc-driver` in `target/<profile>/` —
-//! `cargo test --workspace` does this automatically. Located via
+//! `cargo-no-alloc`/`no-alloc-driver` in `target/<profile>/` — a plain
+//! `cargo test --workspace` does not build those binaries. Located via
 //! `CARGO_MANIFEST_DIR` (this package *is* the workspace root) rather than
 //! a `current_exe()` sibling-walk: some sandboxes place test binaries under
 //! `target/<profile>/build/<pkg>/<hash>/out/`, not the usual
 //! `target/<profile>/deps/`, which breaks a fixed "walk up two directories"
 //! assumption.
 
+#[path = "support/hermetic.rs"]
+mod hermetic;
+
+use hermetic::hermetic_checker;
 use no_alloc_report::{Report, Verdict};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -116,6 +123,9 @@ fn diagnostic_only(stderr: &str, case_dir: &Path) -> String {
         "Fresh",
         "Blocking",
         "Removed",
+        // Printed only when another job was still running at the moment a
+        // multi-crate build failed, so it comes and goes with scheduling.
+        "warning: build failed, waiting for other jobs to finish",
         "no_alloc: checked",
         "Error: cargo exited with exit status",
         "Error: Cargo exited with exit status",
@@ -196,56 +206,38 @@ fn checker_args(case_dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Per-case environment, `NAME=value` per line, from an optional
+/// `checker-env` file. For a case whose subject is a refusal caused by the
+/// caller's environment (`RUSTC_WRAPPER`, ambient `RUSTFLAGS`): everything the
+/// harness scrubs is scrubbed first, then these are set.
+fn checker_env(case_dir: &Path) -> Vec<(String, String)> {
+    let Ok(contents) = fs::read_to_string(case_dir.join("checker-env")) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (name, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("checker-env line without `=`: {line}"));
+            (name.trim().to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
 fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
     let target_dir = case_dir.join("target/no-alloc");
     let _ = fs::remove_dir_all(&target_dir);
 
-    let output = Command::new(bin)
+    let output = hermetic_checker(bin)
         .args(checker_args(case_dir))
         .arg("build")
         .current_dir(case_dir)
-        .env_remove("NO_ALLOC_WARN_ONLY")
-        // cargo-no-alloc refuses to run when a rustc wrapper is already set,
-        // because it needs that slot for its own driver. `cargo llvm-cov`
-        // sets `RUSTC_WRAPPER` for instrumentation, which would otherwise
-        // make every fixture bail before compiling anything. `checker()`
-        // below strips these for the same reason.
-        .env_remove("RUSTC_WRAPPER")
-        .env_remove("RUSTC_WORKSPACE_WRAPPER")
-        // The config fixtures assert on what Cargo config contributes to the
-        // build. A developer shell with sccache (`CARGO_BUILD_RUSTC_WRAPPER`)
-        // or ambient `RUSTFLAGS` would shadow or add to that and change what
-        // those fixtures exercise, so none of it may leak in.
-        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
-        .env_remove("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")
-        // The checker refuses a custom compiler or target outright, so a
-        // developer's `RUSTC`/`CARGO_BUILD_TARGET` must not reach a fixture.
-        .env_remove("RUSTC")
-        .env_remove("CARGO_BUILD_RUSTC")
-        .env_remove("CARGO_BUILD_TARGET")
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        // Also decides whether rustc's MIR inliner runs at opt-level >= 2 (it
-        // needs incremental off), which adds or drops chain frames in snapshots.
-        // CI cache actions export `CARGO_INCREMENTAL=0`. That flips rustc's
-        // cross-crate-inlinable inference on, which changes which crate
-        // codegens an upstream non-generic function and so can change a
-        // fixture's verdict; ambient state must not decide that.
-        .env_remove("CARGO_INCREMENTAL")
-        // A checker run that ends in a hard error prints anyhow's backtrace
-        // when the ambient environment has RUST_BACKTRACE set — machine
-        // paths, crate versions and all — which would put every fixture's
-        // stderr snapshot at the mercy of the developer's shell.
-        // RUST_LIB_BACKTRACE turns the same thing on by itself, so removing
-        // only RUST_BACKTRACE would leave half the hole open.
-        .env_remove("RUST_BACKTRACE")
-        .env_remove("RUST_LIB_BACKTRACE")
-        .env("NO_ALLOC_LOG", "off")
-        // The expected.stderr snapshot is plain text; forcing color off
-        // here keeps the comparison stable regardless of the caller's own
-        // `CARGO_TERM_COLOR` (CI sets `always`, which would otherwise leak
-        // ANSI escapes into the diagnostic and break every snapshot).
-        .env("CARGO_TERM_COLOR", "never")
+        // After the scrub in `hermetic_checker`, so a case that deliberately
+        // sets one of the scrubbed variables (to exercise a refusal) is not
+        // undone by it.
+        .envs(checker_env(case_dir))
         .output()
         .map_err(|e| format!("failed to spawn cargo-no-alloc: {e}"))?;
     let stderr = diagnostic_only(&String::from_utf8_lossy(&output.stderr), case_dir);
@@ -404,15 +396,9 @@ fn stable_build_has_zero_footprint() {
 }
 
 fn checker(case: &str, args: &[&str]) -> std::process::Output {
-    Command::new(cargo_no_alloc_bin())
+    hermetic_checker(cargo_no_alloc_bin())
         .args(args)
         .current_dir(ui_dir().join(case))
-        .env("NO_ALLOC_LOG", "off")
-        .env_remove("NO_ALLOC_WARN_ONLY")
-        .env_remove("RUSTC_WRAPPER")
-        .env_remove("RUSTC_WORKSPACE_WRAPPER")
-        .env_remove("RUST_BACKTRACE")
-        .env_remove("RUST_LIB_BACKTRACE")
         .output()
         .expect("run cargo-no-alloc")
 }
@@ -533,13 +519,10 @@ fn cargo_external_subcommand_argv_is_supported() {
         .chain(std::env::split_paths(&path)),
     )
     .unwrap();
-    let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+    let output = hermetic_checker(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .args(["no-alloc", "--", "build"])
         .current_dir(ui_dir().join("pure_arith"))
         .env("PATH", joined)
-        .env("NO_ALLOC_LOG", "off")
-        .env_remove("RUSTC_WRAPPER")
-        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .output()
         .expect("run cargo no-alloc");
     assert!(
@@ -554,15 +537,14 @@ fn environment_interfaces_encoded_flags_and_all_crates_work() {
     let _guard = CHECKER_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let environment = Command::new(cargo_no_alloc_bin())
+    // The variables below are the point of this test, so they are set after
+    // the scrub (`CARGO_ENCODED_RUSTFLAGS` is one of the scrubbed ones).
+    let environment = hermetic_checker(cargo_no_alloc_bin())
         .args(["--", "build"])
         .current_dir(ui_dir().join("direct_alloc"))
-        .env("NO_ALLOC_LOG", "off")
         .env("NO_ALLOC_WARN_ONLY", "1")
         .env("NO_ALLOC_ROOTS", "direct_alloc::root")
         .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1fdebuginfo=0")
-        .env_remove("RUSTC_WRAPPER")
-        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .output()
         .expect("run cargo-no-alloc with environment interfaces");
     assert!(

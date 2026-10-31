@@ -31,7 +31,12 @@ path to Cargo as `RUSTC`, and the driver refuses to run if its argv[1] is any
 other compiler; `RUSTC`/`CARGO_BUILD_RUSTC`, a configured `build.rustc` or
 `build.target`, a member's `default-target`/`forced-target`, and
 `NO_ALLOC_*` keys in Cargo's `[env]` table are refused
-([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)). An
+([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), as is a non-UTF-8
+`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`. Such configuration refusals (and an
+ambient immediate-abort without `--build-std`) persist a failing
+`report.json`; a malformed command line (e.g. `--root a,,b`) is an argument
+error that writes nothing. `--root` accepts a comma-separated list and may be
+repeated; see the README for the full option semantics. An
 exclusive `target/no-alloc.lock` prevents concurrent checker runs in one
 workspace. Normal mode cleans workspace-member artifacts in the dedicated
 target; `--all-crates` cleans the complete checker target. This guarantees that

@@ -1,0 +1,1 @@
+RUSTFLAGS=-Zunstable-options -Cpanic=immediate-abort

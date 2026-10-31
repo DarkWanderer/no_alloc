@@ -5,48 +5,18 @@
 //! machine's sysroot — not baked in here — so a binary built on one machine
 //! (e.g. CI) keeps working when run on another.
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{bail, ensure};
 use std::path::Path;
-use std::process::Command;
 
-// Shared with `src/lib.rs` so the pin can't drift between the build-time
-// check (this file) and the run-time check (the project being analyzed).
+// Shared with `src/toolchain.rs` so the pin, and the way `rustc` is probed
+// for it, can't drift between the build-time check (this file) and the
+// run-time check (the project being analyzed).
 include!("src/toolchain_spec.rs");
 
 fn main() -> anyhow::Result<()> {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let version = Command::new(&rustc)
-        .arg("-vV")
-        .output()
-        .with_context(|| format!("failed to run `{rustc} -vV`"))?;
-    ensure!(
-        version.status.success(),
-        "`{rustc} -vV` exited with {}",
-        version.status
-    );
-    let version = String::from_utf8(version.stdout).context("rustc version is not UTF-8")?;
-    let host = version
-        .lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .context("rustc did not report a host triple")?;
-    ensure!(
-        is_pinned_toolchain(&version, host),
-        toolchain_mismatch_message(&version)
-    );
-
-    let output = Command::new(&rustc)
-        .args(["--print", "sysroot"])
-        .output()
-        .with_context(|| format!("failed to run `{rustc} --print sysroot`"))?;
-    ensure!(
-        output.status.success(),
-        "`{rustc} --print sysroot` exited with {}",
-        output.status
-    );
-    let sysroot = String::from_utf8(output.stdout)
-        .context("sysroot path is not valid UTF-8")?
-        .trim()
-        .to_string();
+    verify_pinned_toolchain(&rustc)?;
+    let sysroot = rustc_sysroot(&rustc)?;
 
     let sysroot_path = Path::new(&sysroot);
     ensure!(

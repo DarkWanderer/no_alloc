@@ -36,8 +36,9 @@
 //! `InstanceKind`, and call edges resolve from the callee operand's *type*
 //! rather than from whether it is a MIR constant (ADR 0007).
 
+use crate::boundary::{panic_strategy, to_frames};
 use crate::leaf::allocates;
-use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
+use no_alloc_report::{intrinsic_cannot_reach_allocator, PanicStrategy, RejectReason, Verdict};
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::{
     Body, Location, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
@@ -46,19 +47,6 @@ use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
-
-/// The panic strategy this compilation is running under, converted at the
-/// rustc boundary for the report. What the traversal does with panic paths
-/// depends on it (`Assert` above, and whether the panic machinery is even
-/// reachable as MIR), so a report that carries a verdict should carry this
-/// alongside it — see ADR 0006.
-pub fn panic_strategy(tcx: TyCtxt<'_>) -> PanicStrategy {
-    match tcx.sess.panic_strategy() {
-        rustc_target::spec::PanicStrategy::Unwind => PanicStrategy::Unwind,
-        rustc_target::spec::PanicStrategy::Abort => PanicStrategy::Abort,
-        rustc_target::spec::PanicStrategy::ImmediateAbort => PanicStrategy::ImmediateAbort,
-    }
-}
 
 /// A checked root instance: the stable, JSON-able `Verdict` plus the raw
 /// `Span`s backing its chain (`Verdict::Frame::span` is already a rendered
@@ -88,7 +76,7 @@ pub fn check_instance<'tcx>(tcx: TyCtxt<'tcx>, root: Instance<'tcx>) -> Checked<
         Some(Finding::Rejected(chain, reason)) => Checked {
             verdict: Verdict::Rejected {
                 chain: to_frames(tcx, &chain),
-                reason,
+                reason: reason.to_string(),
             },
             chain_spans: chain,
         },
@@ -102,7 +90,7 @@ pub fn check_instance<'tcx>(tcx: TyCtxt<'tcx>, root: Instance<'tcx>) -> Checked<
 /// but an already-captured `Finding` doesn't.
 enum Finding<'tcx> {
     Violation(Vec<(Instance<'tcx>, Span)>),
-    Rejected(Vec<(Instance<'tcx>, Span)>, String),
+    Rejected(Vec<(Instance<'tcx>, Span)>, RejectReason),
 }
 
 /// One MIR edge, after resolving whatever the terminator points at.
@@ -114,7 +102,7 @@ enum Edge<'tcx> {
     /// call/drop site in the current instance's body).
     Resolved(Instance<'tcx>, Span),
     /// No statically available callee body — reject, don't assume (ADR 0003).
-    Unresolved(String),
+    Unresolved(RejectReason),
 }
 
 /// Returns `None` if `instance`'s whole reachable subtree passed (or was
@@ -152,6 +140,15 @@ fn visit<'tcx>(
     // graceful "no body" signal.
     if let InstanceKind::Intrinsic(def_id) = instance.def {
         let finding = match tcx.intrinsic(def_id) {
+            // Matched before the table so a name that ever lands in the table
+            // by mistake still gets the per-instantiation check: these
+            // intrinsics lower to a `panic_nounwind` call for a failing
+            // instantiation, which a name-only table cannot express.
+            Some(intrinsic)
+                if let Some(requirement) = ValidityRequirement::from_intrinsic(intrinsic.name) =>
+            {
+                classify_validity_assertion(tcx, instance, intrinsic, requirement, stack)
+            }
             Some(intrinsic) if intrinsic_cannot_reach_allocator(intrinsic.name.as_str()) => {
                 // An intrinsic has no body of its own; `local` was passed
                 // down unchanged from the body whose MIR contains the call.
@@ -170,21 +167,17 @@ fn visit<'tcx>(
                     None => None,
                 }
             }
-            Some(intrinsic) if ValidityRequirement::from_intrinsic(intrinsic.name).is_some() => {
-                classify_validity_assertion(tcx, instance, intrinsic, stack)
-            }
             Some(intrinsic) => Some(Finding::Rejected(
                 stack.clone(),
-                format!(
-                    "intrinsic `{}` is not in the non-allocating intrinsic table",
-                    intrinsic.name
-                ),
+                RejectReason::IntrinsicNotInTable {
+                    name: intrinsic.name.to_string(),
+                },
             )),
             // `InstanceKind::Intrinsic` without an `IntrinsicDef` shouldn't
             // happen; reject rather than guess if it ever does.
             None => Some(Finding::Rejected(
                 stack.clone(),
-                "unidentifiable intrinsic callee".to_string(),
+                RejectReason::UnidentifiableIntrinsic,
             )),
         };
         stack.pop();
@@ -363,9 +356,9 @@ fn classify_validity_assertion<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     intrinsic: ty::IntrinsicDef,
+    requirement: ValidityRequirement,
     stack: &[(Instance<'tcx>, Span)],
 ) -> Option<Finding<'tcx>> {
-    let requirement = ValidityRequirement::from_intrinsic(intrinsic.name)?;
     let ty = instance.args.type_at(0);
     let typing_env = ty::TypingEnv::fully_monomorphized();
     let holds = tcx
@@ -376,10 +369,10 @@ fn classify_validity_assertion<'tcx>(
     }
     Some(Finding::Rejected(
         stack.to_vec(),
-        format!(
-            "`{}::<{ty}>` does not hold, so this call compiles to a panic",
-            intrinsic.name
-        ),
+        RejectReason::ValidityAssertionFails {
+            intrinsic: intrinsic.name.to_string(),
+            ty: ty.to_string(),
+        },
     ))
 }
 
@@ -396,7 +389,7 @@ fn extern_tail_projection<'tcx>(
     instance: Instance<'tcx>,
     typing_env: ty::TypingEnv<'tcx>,
     body: &Body<'tcx>,
-) -> Option<String> {
+) -> Option<RejectReason> {
     struct Finder<'tcx> {
         tcx: TyCtxt<'tcx>,
         instance: Instance<'tcx>,
@@ -428,18 +421,13 @@ fn extern_tail_projection<'tcx>(
         found: false,
     };
     finder.visit_body(body);
-    finder.found.then(|| {
-        "projection into an extern-type tail: codegen computes its size with a `panic_nounwind` call"
-            .to_string()
-    })
+    finder.found.then_some(RejectReason::ExternTailProjection)
 }
 
 fn has_explicit_linkage(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> bool {
     let attrs = tcx.codegen_fn_attrs(def_id);
     attrs.linkage.is_some() || attrs.import_linkage.is_some()
 }
-
-const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
 
 /// Exhaustively classifies whether an instance has faithful MIR to traverse.
 /// This must be decided from `InstanceKind`, not from `instance.def_id()`:
@@ -449,19 +437,16 @@ const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
 fn resolve_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
-) -> Result<&'tcx Body<'tcx>, String> {
+) -> Result<&'tcx Body<'tcx>, RejectReason> {
     match instance.def {
         InstanceKind::Item(def_id) => {
             if tcx.is_foreign_item(def_id) || !tcx.is_mir_available(def_id) {
-                Err(NO_MIR_BODY.to_string())
+                Err(RejectReason::NoMirBody)
             } else if has_explicit_linkage(tcx, def_id) {
                 // `#[linkage = "weak"]` and friends: the MIR here is one
                 // candidate definition, but the linker may bind the symbol
                 // to a different one, so its MIR is not faithful evidence.
-                Err(
-                    "callee has explicit linkage; the linker may bind it to a different definition"
-                        .to_string(),
-                )
+                Err(RejectReason::ExplicitLinkage)
             } else {
                 Ok(tcx.instance_mir(instance.def))
             }
@@ -469,8 +454,8 @@ fn resolve_body<'tcx>(
         // Rust intrinsics return before this function after classification
         // against ADR 0005. Keep the fallback rejecting so refactoring that
         // path cannot turn an intrinsic into an `instance_mir` ICE.
-        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => Err(NO_MIR_BODY.to_string()),
-        InstanceKind::Virtual(..) => Err(NO_MIR_BODY.to_string()),
+        InstanceKind::Intrinsic(_) | InstanceKind::LlvmIntrinsic(_) => Err(RejectReason::NoMirBody),
+        InstanceKind::Virtual(..) => Err(RejectReason::NoMirBody),
         InstanceKind::Shim(shim) => resolve_shim_body(tcx, instance, shim),
     }
 }
@@ -483,7 +468,7 @@ fn resolve_shim_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     shim: ShimKind<'tcx>,
-) -> Result<&'tcx Body<'tcx>, String> {
+) -> Result<&'tcx Body<'tcx>, RejectReason> {
     match shim {
         // Direct-call adapters whose synthesized bodies expose their real
         // callees to the ordinary `Call` classification below.
@@ -495,19 +480,12 @@ fn resolve_shim_body<'tcx>(
         | ShimKind::Clone(..)
         | ShimKind::FnPtrAddr(..) => Ok(tcx.instance_mir(instance.def)),
         // TLS access can lower to a runtime call that has no MIR callee.
-        ShimKind::ThreadLocal(_) => Err(
-            "thread-local access is not modeled (may call into the TLS runtime on some targets)"
-                .to_string(),
-        ),
+        ShimKind::ThreadLocal(_) => Err(RejectReason::ThreadLocalAccess),
         // These unstable synthesized bodies have not been audited.
-        ShimKind::ConstructCoroutineInClosure { .. } => {
-            Err("coroutine-closure construction shim is not yet audited by this tool".to_string())
-        }
+        ShimKind::ConstructCoroutineInClosure { .. } => Err(RejectReason::CoroutineClosureShim),
         ShimKind::FutureDropPoll(..)
         | ShimKind::AsyncDropGlue(..)
-        | ShimKind::AsyncDropGlueCtor(..) => {
-            Err("async drop glue is not yet audited by this tool".to_string())
-        }
+        | ShimKind::AsyncDropGlueCtor(..) => Err(RejectReason::AsyncDropGlue),
     }
 }
 
@@ -548,10 +526,9 @@ fn classify_statements<'tcx>(statements: &[rustc_middle::mir::Statement<'tcx>]) 
         .iter()
         .filter_map(|statement| match &statement.kind {
             StatementKind::Assign(assign) => match assign.1 {
-                Rvalue::ThreadLocalRef(_) => Some(Edge::Unresolved(
-                    "thread-local access is not modeled (may call into the TLS runtime on some targets)"
-                        .to_string(),
-                )),
+                Rvalue::ThreadLocalRef(_) => {
+                    Some(Edge::Unresolved(RejectReason::ThreadLocalAccess))
+                }
                 Rvalue::Use(..)
                 | Rvalue::Repeat(..)
                 | Rvalue::Ref(..)
@@ -611,15 +588,15 @@ fn classify_terminator<'tcx>(
                 ty::FnDef(def_id, args) => match args.no_bound_vars() {
                     Some(args) => match Instance::try_resolve(tcx, typing_env, def_id, args) {
                         Ok(Some(callee)) => edges.push(Edge::Resolved(callee, term_span)),
-                        Ok(None) | Err(_) => edges.push(Edge::Unresolved(format!(
-                            "callee `{}` could not be resolved to a concrete implementation",
-                            tcx.def_path_str(def_id)
-                        ))),
+                        Ok(None) | Err(_) => {
+                            edges.push(Edge::Unresolved(RejectReason::CalleeUnresolved {
+                                path: tcx.def_path_str(def_id),
+                            }))
+                        }
                     },
-                    None => edges.push(Edge::Unresolved(format!(
-                        "callee `{}` is still generic over bound variables",
-                        tcx.def_path_str(def_id)
-                    ))),
+                    None => edges.push(Edge::Unresolved(RejectReason::CalleeHasBoundVars {
+                        path: tcx.def_path_str(def_id),
+                    })),
                 },
                 // A genuine `fn` pointer: the type names a signature, not a
                 // body. `dyn` dispatch usually resolves via `try_resolve` to
@@ -628,9 +605,7 @@ fn classify_terminator<'tcx>(
                 // through the two different guards. Rejection here is
                 // deliberately not path-sensitive: this fires even inside a
                 // branch that can provably never execute.
-                _ => edges.push(Edge::Unresolved(
-                    "callee is a function pointer, not a statically resolvable body".to_string(),
-                )),
+                _ => edges.push(Edge::Unresolved(RejectReason::FunctionPointerCallee)),
             }
         }
         TerminatorKind::Drop { place, .. } => {
@@ -658,10 +633,7 @@ fn classify_terminator<'tcx>(
                 // `Drop::drop` is not statically known here, so reject —
                 // this also catches the shim's residual `Drop`, since it
                 // has the same `dyn` place type and takes this same arm.
-                edges.push(Edge::Unresolved(
-                    "drop through a vtable: the concrete destructor is not statically known"
-                        .to_string(),
-                ));
+                edges.push(Edge::Unresolved(RejectReason::DropThroughVtable));
             } else if ty.needs_drop(tcx, typing_env) {
                 edges.push(Edge::Resolved(
                     Instance::resolve_drop_glue(tcx, ty),
@@ -672,25 +644,20 @@ fn classify_terminator<'tcx>(
             }
         }
         TerminatorKind::InlineAsm { .. } => {
-            edges.push(Edge::Unresolved(
-                "inline assembly can call or do anything opaquely".to_string(),
-            ));
+            edges.push(Edge::Unresolved(RejectReason::InlineAsm));
         }
-        TerminatorKind::Assert { .. } if tcx.sess.panic_strategy().unwinds() => {
-            edges.push(Edge::Unresolved(
-                "assertion may invoke the panic handler when panic=unwind".to_string(),
-            ));
-        }
-        // Under immediate-abort there is no carve-out (ADR 0006): codegen
-        // lowers a failing assertion to a call to a core panic lang item,
-        // and that call is followed like any other, rather than trusted to
-        // be the bare `abort` std compiles it to in this mode.
-        TerminatorKind::Assert { msg, .. }
-            if tcx.sess.panic_strategy() == rustc_target::spec::PanicStrategy::ImmediateAbort =>
-        {
-            edges.push(assert_panic_edge(tcx, msg, term_span));
-        }
-        TerminatorKind::Assert { .. } => edges.push(Edge::None),
+        // Exhaustive over the panic strategy so a new one must be classified
+        // here instead of falling into the scope-exclusion carve-out.
+        TerminatorKind::Assert { msg, .. } => match panic_strategy(tcx) {
+            PanicStrategy::Unwind => edges.push(Edge::Unresolved(RejectReason::AssertUnderUnwind)),
+            // Under immediate-abort there is no carve-out (ADR 0006):
+            // codegen lowers a failing assertion to a call to a core panic
+            // lang item, and that call is followed like any other, rather
+            // than trusted to be the bare `abort` std compiles it to in
+            // this mode.
+            PanicStrategy::ImmediateAbort => edges.push(assert_panic_edge(tcx, msg, term_span)),
+            PanicStrategy::Abort => edges.push(Edge::None),
+        },
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::UnwindResume
@@ -700,9 +667,9 @@ fn classify_terminator<'tcx>(
         TerminatorKind::CoroutineDrop
         | TerminatorKind::Yield { .. }
         | TerminatorKind::FalseEdge { .. }
-        | TerminatorKind::FalseUnwind { .. } => edges.push(Edge::Unresolved(
-            "unexpected pre-lowering control-flow terminator".to_string(),
-        )),
+        | TerminatorKind::FalseUnwind { .. } => {
+            edges.push(Edge::Unresolved(RejectReason::PreLoweringTerminator))
+        }
     }
 
     edges
@@ -730,24 +697,8 @@ fn assert_panic_edge<'tcx>(
     };
     match tcx.lang_items().get(lang_item) {
         Some(def_id) => Edge::Resolved(Instance::mono(tcx, def_id), span),
-        None => Edge::Unresolved(format!(
-            "assertion panics through lang item `{}`, which is not defined",
-            lang_item.name()
-        )),
+        None => Edge::Unresolved(RejectReason::LangItemUndefined {
+            name: lang_item.name().to_string(),
+        }),
     }
-}
-
-fn to_frames<'tcx>(tcx: TyCtxt<'tcx>, chain: &[(Instance<'tcx>, Span)]) -> Vec<Frame> {
-    chain
-        .iter()
-        .map(|(instance, span)| Frame {
-            def_path: tcx.def_path_str(instance.def_id()),
-            // Same rendering `diagnostics.rs` uses for its `via `{instance}``
-            // notes, so report.json's chain matches the stderr it's meant to
-            // corroborate (the whole point being a per-instantiation verdict
-            // needs the concrete type arguments, not just the definition).
-            instance: instance.to_string(),
-            span: Some(tcx.sess.source_map().span_to_diagnostic_string(*span)),
-        })
-        .collect()
 }
