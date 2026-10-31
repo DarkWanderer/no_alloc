@@ -225,6 +225,8 @@ fn run_case(bin: &Path, case_dir: &Path, bless: bool) -> Result<(), String> {
         .env_remove("CARGO_BUILD_TARGET")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        // Also decides whether rustc's MIR inliner runs at opt-level >= 2 (it
+        // needs incremental off), which adds or drops chain frames in snapshots.
         // CI cache actions export `CARGO_INCREMENTAL=0`. That flips rustc's
         // cross-crate-inlinable inference on, which changes which crate
         // codegens an upstream non-generic function and so can change a

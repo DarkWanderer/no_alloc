@@ -124,7 +124,13 @@ pub fn discover<'tcx>(tcx: TyCtxt<'tcx>) -> Discovery<'tcx> {
         }
     }
 
-    discover_upstream_shared(tcx, &mut seen_instances, &mut instantiated_defs, &mut roots);
+    discover_upstream_shared(
+        tcx,
+        &mut seen_instances,
+        &mut instantiated_defs,
+        &mut roots,
+        &mut selection_errors,
+    );
 
     // Mono collection cannot contain uncalled local functions. Seed those
     // explicitly, while preserving NotInstantiated for generic definitions.
@@ -256,16 +262,21 @@ fn should_codegen_locally<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
 /// upstream-shared instances this discovery is after. The provider is called
 /// directly, not through the query, so the filtered answer the collector
 /// already cached for local instances is neither reused nor overwritten.
-fn unfiltered_used_items<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Vec<MonoItem<'tcx>> {
+fn unfiltered_used_items<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<Vec<MonoItem<'tcx>>, ()> {
     let provider = tcx.query_system.local_providers.items_of_instance;
     let previous = SEE_UPSTREAM_BODIES.with(|flag| flag.replace(true));
     let result = provider(tcx, (instance, CollectionMode::UsedItems));
     SEE_UPSTREAM_BODIES.with(|flag| flag.set(previous));
-    // A normalization error is the collector's own fatal case and has already
-    // stopped the build; there is nothing further to report here.
+    // The collector only treats a normalization error as fatal for instances
+    // it queried itself. An upstream instance it never walked can fail here
+    // with the build still going, so the caller must surface the failure
+    // rather than treat the body as empty (ADR 0003: reject, don't assume).
     match result {
-        Ok((used, _mentioned)) => used.iter().map(|item| item.node).collect(),
-        Err(_) => Vec::new(),
+        Ok((used, _mentioned)) => Ok(used.iter().map(|item| item.node).collect()),
+        Err(_) => Err(()),
     }
 }
 
@@ -283,6 +294,7 @@ fn discover_upstream_shared<'tcx>(
     seen_instances: &mut HashSet<Instance<'tcx>>,
     instantiated_defs: &mut HashSet<DefId>,
     roots: &mut Vec<DiscoveredRoot<'tcx>>,
+    selection_errors: &mut Vec<String>,
 ) {
     let partitions = tcx.collect_and_partition_mono_items(());
     let local: HashSet<Instance<'tcx>> = partitions
@@ -297,7 +309,13 @@ fn discover_upstream_shared<'tcx>(
     let mut worklist: Vec<Instance<'tcx>> = local.iter().copied().collect();
     let mut visited: HashSet<Instance<'tcx>> = HashSet::new();
     while let Some(instance) = worklist.pop() {
-        for item in unfiltered_used_items(tcx, instance) {
+        let Ok(items) = unfiltered_used_items(tcx, instance) else {
+            selection_errors.push(format!(
+                "could not collect the body of `{instance}` while discovering upstream-shared roots"
+            ));
+            continue;
+        };
+        for item in items {
             let MonoItem::Fn(callee) = item else {
                 continue;
             };
@@ -313,6 +331,20 @@ fn discover_upstream_shared<'tcx>(
                 && tcx.generics_of(def_id).requires_monomorphization(tcx)
                 && seen_instances.insert(callee)
             {
+                // The same async refusal as the other two discovery passes:
+                // a non-workspace dependency can carry the raw marker on an
+                // `async fn` (only the proc macro refuses it), and adopting
+                // it would check just the future constructor. Not adopted,
+                // but the walk still continues into it below: it costs
+                // nothing and keeps this loop's invariant (every unshared
+                // neighbour is visited) free of special cases.
+                if matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
+                    && tcx.asyncness(def_id).is_async()
+                {
+                    selection_errors.push(async_root_error(tcx, def_id, false));
+                    worklist.push(callee);
+                    continue;
+                }
                 instantiated_defs.insert(def_id);
                 roots.push(DiscoveredRoot::Instance {
                     root: def_id,

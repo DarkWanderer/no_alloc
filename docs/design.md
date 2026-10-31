@@ -47,8 +47,10 @@ reported as `NotInstantiated` unless another fragment contains an instance.
 Generic instantiations that an upstream crate emitted (share-generics) are
 absent from that set, so a second walk over resolved callees not codegened
 locally adopts marked generic roots found there
-([ADR 0004](../adr/0004-cross-crate-roots-and-report-aggregation.md)). `async fn`
-roots are selection errors.
+([ADR 0004](../adr/0004-cross-crate-roots-and-report-aggregation.md)); a fn
+pointer reachable only from a `static` initializer, local or upstream, is not
+covered. `async fn` roots, including ones found by that walk, are selection
+errors.
 
 Every rustc process atomically writes a uniquely named report fragment. Each
 checked root records the `Environment` (panic strategy, opt-level,

@@ -767,25 +767,34 @@ fn workspace_manifest_paths(json: &str) -> Result<Vec<PathBuf>> {
         .collect()
 }
 
-/// `(package name, keys)` for every workspace member that sets a per-package
+/// Argv (after the cargo binary) of the `cargo metadata` call that lists the
+/// workspace the build will use. `--manifest-path` is an option of the
+/// `metadata` subcommand, not a global one, so it must follow `metadata`;
+/// `--config` is accepted globally and stays in front.
+fn metadata_args(cargo_args: &[String]) -> Vec<String> {
+    let mut argv = config_override_args(cargo_args);
+    argv.extend(["metadata", "--format-version", "1", "--no-deps"].map(String::from));
+    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--manifest-path" {
+            argv.push(arg.clone());
+            argv.extend(args.next().cloned());
+        } else if arg.starts_with("--manifest-path=") {
+            argv.push(arg.clone());
+        }
+    }
+    argv
+}
+
+/// `(manifest path, keys)` for every workspace member that sets a per-package
 /// target. Honours the build's `--manifest-path` and `--config` so it looks at
 /// the workspace the build will.
 fn workspace_per_package_targets(
     cargo: &OsString,
     cargo_args: &[String],
 ) -> Result<Vec<(String, Vec<&'static str>)>> {
-    let mut command = Command::new(cargo);
-    command.args(config_override_args(cargo_args));
-    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
-    while let Some(arg) = args.next() {
-        if arg == "--manifest-path" {
-            command.arg(arg).args(args.next());
-        } else if arg.starts_with("--manifest-path=") {
-            command.arg(arg);
-        }
-    }
-    let output = command
-        .args(["metadata", "--format-version", "1", "--no-deps"])
+    let output = Command::new(cargo)
+        .args(metadata_args(cargo_args))
         .output()
         .context("failed to spawn `cargo metadata`")?;
     ensure!(
@@ -1340,10 +1349,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         .iter()
         .filter(|root| !matches!(root.verdict, Verdict::Pass | Verdict::NotInstantiated))
         .count();
-    eprintln!(
-        "no_alloc: checked {} root instance(s), {failures} finding(s)",
-        report.roots.len()
-    );
+    // Counts instances with a verdict so this line agrees with the
+    // "checked 0 root instances" warning for a not-instantiated-only run.
+    let checked = report
+        .roots
+        .iter()
+        .filter(|root| !matches!(root.verdict, Verdict::NotInstantiated))
+        .count();
+    eprintln!("no_alloc: checked {checked} root instance(s), {failures} finding(s)");
     // No verdict at all (0 roots, or only `not_instantiated` ones) is a silent-pass hazard, not a clean pass: it exits 0 and
     // looks identical to "everything checked out" unless called out here.
     if !report.checked_an_instance() {
@@ -1395,6 +1408,36 @@ mod tests {
             ParsedArgs::Help => bail!("expected an Invocation, got --help"),
             ParsedArgs::Version => bail!("expected an Invocation, got --version"),
         }
+    }
+
+    #[test]
+    fn metadata_args_put_manifest_path_after_the_subcommand() -> Result<()> {
+        let to_args = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        for forwarded in [
+            &["build", "--manifest-path", "/w/Cargo.toml"][..],
+            &["build", "--manifest-path=/w/Cargo.toml"][..],
+        ] {
+            let mut cargo_args = to_args(forwarded);
+            cargo_args.extend(to_args(&["--config", "a=1", "--", "--manifest-path", "x"]));
+            let argv = metadata_args(&cargo_args);
+            let metadata = argv
+                .iter()
+                .position(|a| a == "metadata")
+                .context("metadata")?;
+            let manifest = argv
+                .iter()
+                .position(|a| a.starts_with("--manifest-path"))
+                .context("manifest-path")?;
+            assert!(metadata < manifest, "{argv:?}");
+            assert_eq!(&argv[..2], ["--config", "a=1"]);
+            // Only the pre-`--` occurrence belongs to cargo.
+            let count = argv
+                .iter()
+                .filter(|a| a.starts_with("--manifest-path"))
+                .count();
+            assert_eq!(count, 1, "{argv:?}");
+        }
+        Ok(())
     }
 
     #[test]
@@ -2403,9 +2446,12 @@ mod tests {
     }
 
     #[test]
-    fn per_package_target_rejection_names_the_package_and_key() {
-        let message = per_package_target_rejection(&[("app".to_owned(), vec!["default-target"])]);
-        assert!(message.contains("`app`"), "{message}");
+    fn per_package_target_rejection_names_the_manifest_and_key() {
+        let message = per_package_target_rejection(&[(
+            "/w/app/Cargo.toml".to_owned(),
+            vec!["default-target"],
+        )]);
+        assert!(message.contains("`/w/app/Cargo.toml`"), "{message}");
         assert!(message.contains("`default-target`"), "{message}");
     }
 

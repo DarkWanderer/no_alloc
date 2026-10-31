@@ -12,11 +12,6 @@
             "span": null
           },
           {
-            "def_path": "std::boxed::Box::<T>::new_uninit",
-            "instance": "std::boxed::Box::<[u32; 1]>::new_uninit",
-            "span": null
-          },
-          {
             "def_path": "std::boxed::box_new_uninit",
             "instance": "std::boxed::box_new_uninit",
             "span": null

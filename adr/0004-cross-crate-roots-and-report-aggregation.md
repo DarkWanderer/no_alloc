@@ -50,8 +50,9 @@ The query drops neighbours `should_codegen_locally` rejects, which are exactly
 the shared ones, so the driver wraps that hook (`override_providers`) and the
 walk calls the query's provider directly with the wrapper widened to upstream
 instances whose MIR is available; every other query sees the collector's real
-hook. Not covered: a shared generic fn pointer stored only in a local
-`static`'s initializer. The restriction to generic roots keeps the rule above
+hook. Not covered: a shared generic fn pointer stored only in a `static`'s
+initializer, local or upstream (the walk is seeded with `MonoItem::Fn`s only,
+and the hook wrapper excludes statics). The restriction to generic roots keeps the rule above
 intact: a marked non-generic function in a non-workspace dependency still
 requires `--all-crates`. Pinned by `tests/ui/cross_crate_shared_generic`,
 `_release` (opt-level 3, `#[inline(never)]` wrapper) and `_fnptr` (reify cast).

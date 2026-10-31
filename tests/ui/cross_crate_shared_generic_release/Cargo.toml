@@ -11,3 +11,6 @@ shared_dep = { path = "dep" }
 
 [profile.dev]
 opt-level = 3
+# rustc's MIR inliner runs only without incremental compilation, so an ambient
+# setting would change which frames the verdict chain contains.
+incremental = false

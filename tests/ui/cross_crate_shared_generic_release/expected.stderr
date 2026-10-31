@@ -9,16 +9,6 @@ note: via `shared_dep::process::<u32>`
     |
   2 | pub fn process<T: Default>() -> usize {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: via `std::boxed::Box::<[u32; 1]>::new_uninit`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/macros.rs:60:52
-    |
- 60 |             $crate::intrinsics::write_box_via_move($crate::boxed::Box::new_uninit(), [$($x),+])
-    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-   ::: dep/src/lib.rs:3:21
-    |
-  3 |     let v: Vec<T> = vec![T::default()];
-    |                     ------------------ in this macro invocation
 note: via `std::boxed::box_new_uninit`
    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:322:33
     |
