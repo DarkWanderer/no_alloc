@@ -1,8 +1,8 @@
-//! One definition of "a checker invocation the developer's shell cannot
-//! influence", shared by the UI harness (`tests/ui.rs`) and the throughput
-//! bench (`benches/throughput.rs`, via `#[path]`). Three copies of this list
-//! had drifted apart; a variable missing from one of them made that caller's
-//! results depend on whoever ran it.
+//! A checker invocation the developer's shell cannot influence, shared by the
+//! UI harness (`tests/ui.rs`) and the throughput bench
+//! (`benches/throughput.rs`, via `#[path]`). It lives in one place so every
+//! caller sees the same scrubbed environment; a variable missing from one
+//! copy would make that caller's results depend on whoever ran it.
 
 use std::ffi::OsStr;
 use std::process::Command;

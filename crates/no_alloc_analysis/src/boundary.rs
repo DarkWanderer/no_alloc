@@ -1,7 +1,8 @@
-//! The one place rustc types become `no_alloc_report` types. The report crate
-//! must stay buildable on stable, so every conversion lives here and nowhere
-//! else; callers elsewhere in this crate and in the driver only see the
-//! report-side values.
+//! Where rustc types become `no_alloc_report` types. The report crate must stay
+//! buildable on stable, so this module owns the rustc-enum-to-report-enum
+//! mappings and the construction of `Environment` and `RootVerdict`. A few
+//! simpler conversions (`roots::root_path`, rendering reasons and intrinsic
+//! names to strings in `traversal.rs`) live next to their callers.
 
 use crate::roots::root_path;
 use no_alloc_report::{Environment, Frame, PanicStrategy, RootVerdict, Verdict};

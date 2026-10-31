@@ -54,7 +54,9 @@ monomorphized graph. `test` is accepted but is not a supported mode for
 meaningful results — see "Guarantee and limitations" below. The checker owns
 its target and target directory, so user-supplied `--target` and
 `--target-dir` are rejected. `--root` selects an unannotated function by
-canonical path across the complete build.
+canonical path across the complete build; it accepts a comma-separated list
+and may be repeated (`--root a,b --root c`). A malformed command line, such
+as `--root a,,b`, is an argument error and writes no report.
 
 By default only workspace members are instrumented (`RUSTC_WORKSPACE_WRAPPER`).
 A `#[no_alloc]` marker on a non-generic function in a registry or path
@@ -83,6 +85,11 @@ so a configured `build.rustc` is refused (a substitute compiler could add
 refused, since the checker always builds for the host; so is a workspace
 member's `default-target` / `forced-target` (`per-package-target`). Keys starting
 `NO_ALLOC_` in Cargo's `[env]` table are refused.
+
+A non-UTF-8 `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is refused. These
+configuration refusals (rustc override, `RUSTC_WRAPPER`, ambient
+immediate-abort without `--build-std`, non-UTF-8 flags) persist a failing
+`report.json`; operational errors and argument errors do not.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
 environment interfaces remain supported. The final deterministic report is

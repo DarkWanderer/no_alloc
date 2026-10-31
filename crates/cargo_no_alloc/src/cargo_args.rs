@@ -1,7 +1,8 @@
 //! Scanning the Cargo arguments the checker forwards. The scanners
-//! deliberately stay as dumb as they were: an option's value is only consumed
-//! for the options asked about, so a look-alike value of another option is
-//! still seen as an argument.
+//! deliberately do not skip other options' values: an option's value is only
+//! consumed for the options asked about. That matches the behaviour the
+//! checker has always had, and "fixing" it would change which argument is
+//! treated as `--target`.
 
 /// Splits at the first bare `--`: Cargo's own arguments before it, the test
 /// runner's after it (separator included). Anything past the separator is not

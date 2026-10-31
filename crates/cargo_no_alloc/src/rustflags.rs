@@ -99,14 +99,8 @@ pub(crate) fn declares_immediate_abort(encoded: Option<&str>, plain: Option<&str
 
 /// Whether the pre-flight ambient-flag guard should reject the run.
 ///
-/// The escape hatch is `--build-std`, not `--immediate-abort` specifically:
-/// `--immediate-abort` always implies `--build-std` (`parse_args` sets both
-/// together), but the reverse isn't required, and a hand-set ambient
-/// strategy plus plain `--build-std` rebuilds the sysroot under the same
-/// inherited flags — exactly the case `mixed_sysroot_panic_strategy` above
-/// already treats as coherent. Gating this earlier guard on
-/// `inv.immediate_abort` instead rejected that same legitimate combination
-/// before the build ever ran.
+/// The escape hatch is `StdMode::rebuilds_std()`, not immediate-abort
+/// specifically; see [`reject_ambient_immediate_abort`] for why.
 pub(crate) fn ambient_immediate_abort_needs_build_std(
     std_mode: StdMode,
     ambient: Option<&AmbientRustflags>,
@@ -120,14 +114,13 @@ pub(crate) fn ambient_immediate_abort_needs_build_std(
 /// it was precompiled with, and the report would claim `immediate_abort` for a
 /// build where std's panic paths are not compiled that way at all.
 ///
-/// The escape hatch is `--build-std`, not `--immediate-abort` —
-/// `--immediate-abort` always implies `--build-std` (see `StdMode`), but the
-/// reverse isn't required: a hand-set ambient strategy plus plain
-/// `--build-std` rebuilds the sysroot under the same inherited flags and is
-/// exactly as coherent as the flag, which is what the post-build check's own
-/// `mixed_sysroot_panic_strategy` already agrees is fine. Gating on the
-/// immediate-abort option here instead rejected that legitimate combination
-/// before ever reaching the build.
+/// The escape hatch is `StdMode::rebuilds_std()`, not the immediate-abort
+/// mode: immediate-abort always rebuilds std, but the reverse isn't required.
+/// A hand-set ambient strategy plus plain `--build-std` rebuilds the sysroot
+/// under the same inherited flags and is exactly as coherent as the flag,
+/// which `outcome::mixed_sysroot_panic_strategy` agrees with after the build.
+/// Gating on immediate-abort alone would reject that legitimate combination
+/// before the build runs.
 pub(crate) fn reject_ambient_immediate_abort(
     report_path: &Path,
     std_mode: StdMode,

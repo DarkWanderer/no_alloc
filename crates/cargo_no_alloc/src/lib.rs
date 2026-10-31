@@ -97,7 +97,11 @@ fn prepare_target(
 /// Orchestration only; each step that decides something lives in a function
 /// of its own. The order is part of the contract (and unit-tested where it
 /// can be): the lock is taken and the stale report removed before anything
-/// fallible; every refusal after that leaves a failing `report.json`; the
+/// fallible; configuration refusals after that (non-UTF-8 flags, a rustc
+/// override, `RUSTC_WRAPPER`, ambient immediate-abort) leave a failing
+/// `report.json`, while operational errors (toolchain mismatch, resolving
+/// rustc, host triple or sysroot lookup, cargo config/metadata failures in
+/// preflight) are plain errors that leave no report; the
 /// toolchain is validated before any probe runs; and the report is written
 /// before the exit status is decided.
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
@@ -121,9 +125,12 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let cwd = env::current_dir().context("failed to determine current directory")?;
     // Named, not `_`: the File is the lock, and must outlive everything below.
     let (_lock, paths) = acquire_workspace(&cwd)?;
-    // Every refusal from here on goes through `refuse` and friends, which need
-    // only the report path (known once the lock is held and the stale report
-    // is gone), so even the earliest one leaves a failing report.
+    // Configuration refusals from here on go through `refuse` and friends,
+    // which need only the report path (known once the lock is held and the
+    // stale report is gone), so they leave a failing report. Operational
+    // errors (toolchain mismatch, resolve_rustc, host_triple/sysroot_lib_dir,
+    // cargo config/metadata failures in preflight) stay plain errors and
+    // write no report.
     //
     // Read before anything else so the flags are decoded once and every later
     // use sees the same value; a non-UTF-8 one is a refusal, not a lossy guess.
