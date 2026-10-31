@@ -36,8 +36,9 @@
 //! `InstanceKind`, and call edges resolve from the callee operand's *type*
 //! rather than from whether it is a MIR constant (ADR 0007).
 
+use crate::boundary::{panic_strategy, to_frames};
 use crate::leaf::allocates;
-use no_alloc_report::{intrinsic_cannot_reach_allocator, Frame, PanicStrategy, Verdict};
+use no_alloc_report::{intrinsic_cannot_reach_allocator, PanicStrategy, Verdict};
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::{
     Body, Location, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
@@ -46,19 +47,6 @@ use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, TyCtxt};
 use rustc_span::Span;
 use std::collections::HashSet;
-
-/// The panic strategy this compilation is running under, converted at the
-/// rustc boundary for the report. What the traversal does with panic paths
-/// depends on it (`Assert` above, and whether the panic machinery is even
-/// reachable as MIR), so a report that carries a verdict should carry this
-/// alongside it — see ADR 0006.
-pub fn panic_strategy(tcx: TyCtxt<'_>) -> PanicStrategy {
-    match tcx.sess.panic_strategy() {
-        rustc_target::spec::PanicStrategy::Unwind => PanicStrategy::Unwind,
-        rustc_target::spec::PanicStrategy::Abort => PanicStrategy::Abort,
-        rustc_target::spec::PanicStrategy::ImmediateAbort => PanicStrategy::ImmediateAbort,
-    }
-}
 
 /// A checked root instance: the stable, JSON-able `Verdict` plus the raw
 /// `Span`s backing its chain (`Verdict::Frame::span` is already a rendered
@@ -740,19 +728,4 @@ fn assert_panic_edge<'tcx>(
             lang_item.name()
         )),
     }
-}
-
-fn to_frames<'tcx>(tcx: TyCtxt<'tcx>, chain: &[(Instance<'tcx>, Span)]) -> Vec<Frame> {
-    chain
-        .iter()
-        .map(|(instance, span)| Frame {
-            def_path: tcx.def_path_str(instance.def_id()),
-            // Same rendering `diagnostics.rs` uses for its `via `{instance}``
-            // notes, so report.json's chain matches the stderr it's meant to
-            // corroborate (the whole point being a per-instantiation verdict
-            // needs the concrete type arguments, not just the definition).
-            instance: instance.to_string(),
-            span: Some(tcx.sess.source_map().span_to_diagnostic_string(*span)),
-        })
-        .collect()
 }
