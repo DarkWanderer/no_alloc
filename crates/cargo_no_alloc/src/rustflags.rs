@@ -6,9 +6,11 @@ use crate::cargo_config::{
     backtick_list, cargo_config_json, string_or_array, StringOrArray, Wording,
 };
 use crate::cli::StdMode;
+use crate::outcome::refuse;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::path::Path;
 
 /// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
 /// unstable, hence the accompanying `-Zunstable-options`. Passing it here
@@ -110,6 +112,39 @@ pub(crate) fn ambient_immediate_abort_needs_build_std(
     ambient: Option<&AmbientRustflags>,
 ) -> bool {
     !std_mode.rebuilds_std() && ambient.is_some_and(AmbientRustflags::selects_immediate_abort)
+}
+
+/// The pre-flight guard. The strategy can arrive through the caller's own
+/// flags instead of the checker option, and then nothing rebuilds the sysroot:
+/// the crate compiles under immediate-abort while std keeps the panic runtime
+/// it was precompiled with, and the report would claim `immediate_abort` for a
+/// build where std's panic paths are not compiled that way at all.
+///
+/// The escape hatch is `--build-std`, not `--immediate-abort` —
+/// `--immediate-abort` always implies `--build-std` (see `StdMode`), but the
+/// reverse isn't required: a hand-set ambient strategy plus plain
+/// `--build-std` rebuilds the sysroot under the same inherited flags and is
+/// exactly as coherent as the flag, which is what the post-build check's own
+/// `mixed_sysroot_panic_strategy` already agrees is fine. Gating on the
+/// immediate-abort option here instead rejected that legitimate combination
+/// before ever reaching the build.
+pub(crate) fn reject_ambient_immediate_abort(
+    report_path: &Path,
+    std_mode: StdMode,
+    ambient: Option<&AmbientRustflags>,
+) -> Result<()> {
+    if !ambient_immediate_abort_needs_build_std(std_mode, ambient) {
+        return Ok(());
+    }
+    Err(refuse(
+        report_path,
+        "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
+         `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
+         report says it means if the standard library is rebuilt with it too; pass \
+         `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
+         strategy yourself)"
+            .to_owned(),
+    ))
 }
 
 /// The Rust flags the caller's build would use, read once so the pre-flight

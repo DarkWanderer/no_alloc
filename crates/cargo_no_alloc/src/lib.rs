@@ -1,41 +1,36 @@
 mod cargo_args;
 mod cargo_config;
 mod cli;
+mod command;
 mod outcome;
+mod preflight;
 mod rustflags;
 #[cfg(test)]
 mod test_support;
 mod toolchain;
+mod workspace;
 
 pub use rustflags::REQUIRED_RUSTFLAGS;
 
-use anyhow::{bail, ensure, Context, Result};
-use cargo_args::{clean_selection_args, split_at_separator};
-use cargo_config::{
-    build_rustc_rejection, build_target_rejection, cargo_config_json, config_override_args,
-    configured_wrappers, parse_build_targets, per_package_target_rejection, reserved_env_keys,
-    reserved_env_rejection, workspace_per_package_targets,
-};
-use cli::{parse_args, Invocation, ParsedArgs, Scope, HELP_TEXT};
-use fs2::FileExt;
-use no_alloc_report::parse_root_spec;
+use anyhow::{ensure, Context, Result};
+use cargo_args::clean_selection_args;
+use cli::{parse_args, Config, ParsedArgs, Scope, HELP_TEXT};
+use command::{build_command, BuildInputs};
 use outcome::{
-    aggregate, mixed_sysroot_panic_strategy, print_summary, refuse, rejected_report,
-    taint_report_for_failed_build, taint_report_for_mixed_sysroot, Aggregated, ZERO_ROOTS_WARNING,
+    aggregate, finalize, mixed_sysroot_panic_strategy, refuse, refuse_configuration, Aggregated,
 };
-use rustflags::{
-    add_required_rustflags, ambient_immediate_abort_needs_build_std, config_rustflags,
-    AmbientRustflags, ConfigRustflags,
-};
+use preflight::{preflight, CargoConfig};
+use rustflags::{reject_ambient_immediate_abort, AmbientRustflags};
 use std::env;
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 use toolchain::{
-    combined_ld_library_path, find_driver, host_triple, reject_rustc_override, resolve_rustc,
-    sysroot_lib_dir, verify_pinned_toolchain,
+    find_driver, host_triple, reject_wrapper_env, sysroot_lib_dir, validate_toolchain,
+    ValidatedRustc,
 };
+use workspace::{acquire_workspace, WorkspacePaths};
 
 const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by cargo.\n\
@@ -45,9 +40,18 @@ fn cargo_status(mut command: Command) -> Result<ExitStatus> {
     command.status().context("failed to spawn Cargo")
 }
 
+/// The target directory exists, with Cargo's safety tag, before Cargo first
+/// sees this custom target, so `cargo clean` can manage it on this and later
+/// runs.
+fn ensure_target_dir(paths: &WorkspacePaths) -> Result<()> {
+    fs::create_dir_all(&paths.target_dir)?;
+    fs::write(paths.target_dir.join("CACHEDIR.TAG"), CACHE_DIR_TAG)?;
+    Ok(())
+}
+
 fn clear_checker_artifacts(
     cargo: &OsString,
-    inv: &Invocation,
+    config: &Config,
     target_dir: &Path,
     host: &str,
     rustc: &Path,
@@ -57,11 +61,11 @@ fn clear_checker_artifacts(
     // `cargo clean --target` probes the compiler too, so a `build.rustc` from
     // config would otherwise run here, before the build's own override.
     clean.env("RUSTC", rustc);
-    if inv.scope == Scope::Workspace {
+    if config.scope == Scope::Workspace {
         clean.arg("--workspace");
     }
     clean
-        .args(clean_selection_args(&inv.cargo_args))
+        .args(clean_selection_args(&config.cargo_args))
         .arg("--target")
         .arg(host)
         .arg("--target-dir")
@@ -71,8 +75,33 @@ fn clear_checker_artifacts(
     Ok(())
 }
 
+/// Cleans what a stale cache could hide behind: the checker's artifacts, so
+/// Cargo cannot find a unit fresh and skip the driver (and with it that unit's
+/// roots), and the previous run's fragments, which would otherwise be merged
+/// into this run's report.
+fn prepare_target(
+    cargo: &OsString,
+    config: &Config,
+    host: &str,
+    rustc: &ValidatedRustc,
+    paths: &WorkspacePaths,
+) -> Result<()> {
+    clear_checker_artifacts(cargo, config, &paths.target_dir, host, rustc.path())?;
+    if paths.fragment_dir.exists() {
+        fs::remove_dir_all(&paths.fragment_dir)?;
+    }
+    fs::create_dir_all(&paths.fragment_dir)?;
+    Ok(())
+}
+
+/// Orchestration only; each step that decides something lives in a function
+/// of its own. The order is part of the contract (and unit-tested where it
+/// can be): the lock is taken and the stale report removed before anything
+/// fallible; every refusal after that leaves a failing `report.json`; the
+/// toolchain is validated before any probe runs; and the report is written
+/// before the exit status is decided.
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
-    let mut inv = match parse_args(args)? {
+    let config = match parse_args(args)? {
         // Neither prints anything about the pinned toolchain or spawns a
         // build, so both work even when the active toolchain is wrong.
         ParsedArgs::Help => {
@@ -83,28 +112,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             println!("cargo-no-alloc {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        ParsedArgs::Run(inv) => inv,
+        ParsedArgs::Run(invocation) => Config::resolve(
+            invocation,
+            env::var("NO_ALLOC_WARN_ONLY").ok().as_deref(),
+            env::var("NO_ALLOC_ROOTS").ok().as_deref(),
+        ),
     };
     let cwd = env::current_dir().context("failed to determine current directory")?;
-    let target_dir = cwd.join("target/no-alloc");
-    let fragment_dir = target_dir.join("fragments");
-    fs::create_dir_all(cwd.join("target"))?;
-    let lock = File::create(cwd.join("target/no-alloc.lock"))?;
-    lock.lock_exclusive()
-        .context("failed to lock target/no-alloc.lock")?;
-    // Every exit below this point that bails before the final write would
-    // otherwise leave the previous run's report in place, readable as this
-    // run's result.
-    let report_path = target_dir.join("report.json");
-    match fs::remove_file(&report_path) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(error).context("failed to remove the previous report.json");
-        }
-        _ => {}
-    }
-    // Every refusal from here on goes through `refuse`, which needs only the
-    // report path (known right above, once the lock is held and the stale
-    // report is gone), so even the earliest one leaves a failing report.
+    // Named, not `_`: the File is the lock, and must outlive everything below.
+    let (_lock, paths) = acquire_workspace(&cwd)?;
+    // Every refusal from here on goes through `refuse` and friends, which need
+    // only the report path (known once the lock is held and the stale report
+    // is gone), so even the earliest one leaves a failing report.
     //
     // Read before anything else so the flags are decoded once and every later
     // use sees the same value; a non-UTF-8 one is a refusal, not a lossy guess.
@@ -112,240 +131,51 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         env::var_os("CARGO_ENCODED_RUSTFLAGS"),
         env::var_os("RUSTFLAGS"),
     )
-    .map_err(|error| refuse(&report_path, error.to_string()))?;
-    // Checked before anything else touches Cargo: a project pinned to the
-    // wrong toolchain otherwise fails much further down, in
-    // `sysroot_lib_dir`, as a raw dynamic-linker error instead of this
-    // actionable message.
-    //
-    // The override check comes first so that no probe ever runs a substitute
-    // compiler, and the probes below use the same resolved path the build is
-    // handed.
-    reject_rustc_override(&report_path)?;
-    let rustc_path = resolve_rustc()?;
-    let rustc = rustc_path
-        .to_str()
-        .context("the path of `rustc` is not valid UTF-8")?
-        .to_owned();
-    verify_pinned_toolchain(&rustc)?;
-    if env::var("NO_ALLOC_WARN_ONLY").as_deref() == Ok("1") {
-        inv.warn_only = true;
-    }
-    if env::var_os("RUSTC_WRAPPER").is_some() || env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some() {
-        return Err(refuse(
-            &report_path,
-            "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc"
-                .to_owned(),
-        ));
-    }
-    if let Ok(existing) = env::var("NO_ALLOC_ROOTS") {
-        inv.roots.extend(parse_root_spec(&existing));
-    }
+    .map_err(|error| refuse(&paths.report_path, error.to_string()))?;
+    let rustc = validate_toolchain(&paths.report_path)?;
+    reject_wrapper_env(&paths.report_path)?;
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let host = host_triple(&rustc)?;
-    // The fragment directory exists before Cargo first sees this custom
-    // target, so create Cargo's safety tag before asking `cargo clean` to
-    // manage it on this and later runs.
-    fs::create_dir_all(&target_dir)?;
-    fs::write(target_dir.join("CACHEDIR.TAG"), CACHE_DIR_TAG)?;
+    let host = host_triple(rustc.as_str())?;
+    ensure_target_dir(&paths)?;
 
-    // Configuration the environment-variable checks above cannot see. A
-    // run that cannot be made faithful is recorded in a persisted report
-    // (not only refused on stderr), the same way a mixed sysroot is, so a
-    // consumer reading `report.json` never finds a clean file for a build
-    // that was not checked.
-    let config_args = config_override_args(&inv.cargo_args);
-    // Neutralised below by blanking the wrapper variables, so only a warning.
-    // (`build.rustc` is not: see `WRAPPER_CONFIG_KEYS`.)
-    for warning in configured_wrappers(&cargo, &config_args)? {
-        eprintln!("warning: {warning}");
-    }
-    let mut rejections = Vec::new();
-    if let Some(json) = cargo_config_json(&cargo, &config_args, "build.rustc")? {
-        // An empty value is Cargo's "unset".
-        let value = json.trim();
-        if value != "\"\"" && !value.is_empty() {
-            rejections.push(build_rustc_rejection(value));
-        }
-    }
-    if let Some(json) = cargo_config_json(&cargo, &config_args, "build.target")? {
-        let targets = parse_build_targets(&json)?;
-        if !targets.is_empty() {
-            rejections.push(build_target_rejection(&targets));
-        }
-    }
-    let per_package_targets = workspace_per_package_targets(&cargo, &inv.cargo_args)?;
-    if !per_package_targets.is_empty() {
-        rejections.push(per_package_target_rejection(&per_package_targets));
-    }
-    if let Some(json) = cargo_config_json(&cargo, &config_args, "env")? {
-        let keys = reserved_env_keys(&json)?;
-        if !keys.is_empty() {
-            rejections.push(reserved_env_rejection(&keys));
-        }
-    }
-    // Cargo ignores config rustflags entirely once either variable is set
-    // (even to an empty value), so the caller's environment is already what
-    // plain `cargo build` would use and there is nothing to import.
-    let mut ambient = env_rustflags;
-    if ambient.is_none() {
-        match config_rustflags(&cargo, &config_args, &host)? {
-            ConfigRustflags::Import(flags) => {
-                if !flags.is_empty() {
-                    tracing::info!(?flags, "importing rustflags from Cargo config");
-                }
-                ambient = AmbientRustflags::from_config(flags);
-            }
-            ConfigRustflags::Unsupported(reason) => rejections.push(reason),
-        }
-    }
-    if !rejections.is_empty() {
-        let report = rejected_report(rejections);
-        report
-            .write_to_file(&report_path)
-            .context("failed to write final report.json")?;
-        for error in &report.selection_errors {
-            eprintln!("error: {error}");
-        }
-        bail!("this build's configuration cannot be checked faithfully; nothing was built");
-    }
+    let found = preflight(
+        &CargoConfig::new(&cargo, &config.cargo_args),
+        &host,
+        env_rustflags,
+        |warning| eprintln!("warning: {warning}"),
+    )?;
+    refuse_configuration(&paths.report_path, found.rejections)?;
+    reject_ambient_immediate_abort(&paths.report_path, config.std_mode, found.ambient.as_ref())?;
 
-    // The strategy can arrive through the caller's own flags instead of the
-    // checker option, and then nothing rebuilds the sysroot: the crate
-    // compiles under immediate-abort while std keeps the panic runtime it
-    // was precompiled with, and the report would claim `immediate_abort` for
-    // a build where std's panic paths are not compiled that way at all.
-    //
-    // The escape hatch is `--build-std`, not `--immediate-abort` —
-    // `--immediate-abort` always implies `--build-std` (see `parse_args`),
-    // but the reverse isn't required: a hand-set ambient strategy plus plain
-    // `--build-std` rebuilds the sysroot under the same inherited flags and
-    // is exactly as coherent as the flag, which is what the post-build
-    // check's own `mixed_sysroot_panic_strategy` already agrees is fine.
-    // Gating on the immediate-abort option here instead rejected that
-    // legitimate combination before ever reaching the build.
-    if ambient_immediate_abort_needs_build_std(inv.std_mode, ambient.as_ref()) {
-        return Err(refuse(
-            &report_path,
-            "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
-             `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
-             report says it means if the standard library is rebuilt with it too; pass \
-             `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
-             strategy yourself)"
-                .to_owned(),
-        ));
-    }
-
-    clear_checker_artifacts(&cargo, &inv, &target_dir, &host, &rustc_path)?;
-    if fragment_dir.exists() {
-        fs::remove_dir_all(&fragment_dir)?;
-    }
-    fs::create_dir_all(&fragment_dir)?;
-
-    let mut command = Command::new(&cargo);
-    command.arg(inv.command.as_str());
-    let (cargo_options, runner_args) = split_at_separator(&inv.cargo_args);
-    command.args(cargo_options);
-    command
-        .arg("--target")
-        .arg(&host)
-        .arg("--target-dir")
-        .arg(&target_dir);
-    if inv.std_mode.rebuilds_std() {
-        command.arg("-Zbuild-std");
-    }
-    command.args(runner_args);
-    let (rustflags_var, rustflags) =
-        add_required_rustflags(ambient.as_ref(), inv.std_mode.selects_immediate_abort());
-    command.env(rustflags_var, rustflags);
-    command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
-    command.env(
-        "NO_ALLOC_ROOTS",
-        inv.roots.iter().cloned().collect::<Vec<_>>().join(","),
-    );
-    // Read back by the driver into each fragment's `Environment` (F4): these
-    // are invocation-level flags, not something `Session` exposes, so they
-    // have to cross the process boundary as plain env vars like everything
-    // else the driver needs from `cargo-no-alloc` itself.
-    command.env("NO_ALLOC_ALL_CRATES", inv.scope.driver_flag());
-    command.env(
-        "NO_ALLOC_BUILD_STD",
-        if inv.std_mode.rebuilds_std() {
-            "1"
-        } else {
-            "0"
-        },
-    );
-    // Always set, never removed: a removed variable is a hole Cargo's `[env]`
-    // table would fill. The driver treats only exactly "1" as warn-only.
-    command.env("NO_ALLOC_WARN_ONLY", if inv.warn_only { "1" } else { "0" });
-    // Hand Cargo the rustc that was validated above (`RUSTC` outranks
-    // `build.rustc`), and tell the driver which one that is so it can refuse
-    // to compile when anything else arrives as its argv[1].
-    command.env("RUSTC", &rustc_path);
-    command.env("NO_ALLOC_EXPECTED_RUSTC", &rustc_path);
+    prepare_target(&cargo, &config, &host, &rustc, &paths)?;
     let driver = find_driver()?;
-    let sysroot_lib = sysroot_lib_dir(&rustc)?;
-    command.env(
-        "LD_LIBRARY_PATH",
-        combined_ld_library_path(&sysroot_lib, env::var_os("LD_LIBRARY_PATH").as_deref()),
-    );
-    for (name, value) in inv.scope.wrapper_env(&driver) {
-        command.env(name, value);
-    }
+    let sysroot_lib = sysroot_lib_dir(rustc.as_str())?;
+    let command = build_command(&BuildInputs {
+        cargo: &cargo,
+        config: &config,
+        host: &host,
+        paths: &paths,
+        rustc: &rustc,
+        driver: &driver,
+        sysroot_lib: &sysroot_lib,
+        inherited_ld_library_path: env::var_os("LD_LIBRARY_PATH").as_deref(),
+        ambient: found.ambient.as_ref(),
+    });
 
     let cargo_status = cargo_status(command)?;
     let Aggregated {
-        mut report,
+        report,
         any_immediate_abort,
-    } = aggregate(&fragment_dir, &inv.roots)?;
-    // The pre-flight guard reads the environment, and the strategy can also
-    // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
-    // plus a profile), `config.toml`, or `--profile`. This one asks the
-    // build itself: the driver recorded the strategy rustc actually used, so
-    // a mixed configuration is caught however it was selected.
-    //
-    // Recorded into `selection_errors` before the report is written, not
-    // just raised as a hard error afterward: `Report::is_success()` would
-    // otherwise say `true` for a persisted `report.json` whose roots all
-    // passed, even though those verdicts were produced against a sysroot
-    // that was never rebuilt to match. A tool reading the file directly
-    // (rather than this process's own exit code) needs the taint to be
-    // in the artifact, not only on stderr.
-    let mixed_sysroot = mixed_sysroot_panic_strategy(inv.std_mode, any_immediate_abort);
-    taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
-    taint_report_for_failed_build(&mut report, cargo_status.success());
-    // Persisted like the taints above, but as a warning: the exit status
-    // stays 0 (a workspace may legitimately have no markers), yet a reader of
-    // `report.json` alone must not take `roots: []`, or a list of roots that
-    // were never instantiated, for a verified pass.
-    if !report.checked_an_instance() {
-        report.warnings.push(ZERO_ROOTS_WARNING.to_owned());
-    }
-    report
-        .write_to_file(&report_path)
-        .context("failed to write final report.json")?;
-    print_summary(&report, inv.warn_only);
-    // The report is written first (above), so the evidence survives this
-    // failure regardless of `--warn-only` — a mixed sysroot invalidates the
-    // very mechanism `--warn-only` relies on to interpret results, so unlike
-    // an ordinary finding it is never downgraded to a warning.
-    ensure!(
-        !mixed_sysroot,
-        "this build compiled with `-Cpanic=immediate-abort` against the precompiled standard \
-         library, which carries its own panic runtime — so the report's verdicts would claim \
-         panic paths that lower to `abort` when std's do not. Pass `--immediate-abort`, which \
-         applies the strategy to both halves, or `--build-std` if you are setting the \
-         strategy yourself (see docs/iterators.md)"
-    );
-    if !cargo_status.success() {
-        bail!("Cargo exited with {cargo_status}");
-    }
-    if !inv.warn_only && !report.is_success() {
-        bail!("no_alloc check failed");
-    }
-    Ok(())
+    } = aggregate(&paths.fragment_dir, &config.roots)?;
+    let mixed_sysroot = mixed_sysroot_panic_strategy(config.std_mode, any_immediate_abort);
+    finalize(
+        report,
+        &paths.report_path,
+        cargo_status,
+        mixed_sysroot,
+        config.warn_only,
+    )
 }
 
 #[cfg(test)]

@@ -76,6 +76,72 @@ pub(crate) fn resolve_rustc() -> Result<PathBuf> {
     bail!("no executable `rustc` found on PATH")
 }
 
+/// A `rustc` that has been through, in this order: the override refusal,
+/// resolution from `PATH`, and the pinned-toolchain check. [`validate_toolchain`]
+/// is the only way to get one, so holding it is the proof that every probe and
+/// the build itself use the compiler that was validated. It replaces a
+/// `String` and a `PathBuf` that had to be kept in step by hand.
+#[derive(Debug)]
+pub(crate) struct ValidatedRustc {
+    path: PathBuf,
+    text: String,
+}
+
+impl ValidatedRustc {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// Skips validation so tests of what is *done with* a validated compiler
+    /// need no real toolchain.
+    #[cfg(test)]
+    pub(crate) fn for_test(path: PathBuf) -> Self {
+        let text = path.to_string_lossy().into_owned();
+        Self { path, text }
+    }
+
+    /// The last step: `path` must be UTF-8 (it is passed to probes as text)
+    /// and the pinned toolchain.
+    fn verify(path: PathBuf) -> Result<Self> {
+        let text = path
+            .to_str()
+            .context("the path of `rustc` is not valid UTF-8")?
+            .to_owned();
+        verify_pinned_toolchain(&text)?;
+        Ok(Self { path, text })
+    }
+}
+
+/// Checked before anything else touches Cargo: a project pinned to the wrong
+/// toolchain otherwise fails much further down, in `sysroot_lib_dir`, as a raw
+/// dynamic-linker error instead of an actionable message.
+///
+/// The override check comes first so that no probe ever runs a substitute
+/// compiler, and the probes after it use the same resolved path the build is
+/// handed.
+pub(crate) fn validate_toolchain(report_path: &Path) -> Result<ValidatedRustc> {
+    reject_rustc_override(report_path)?;
+    ValidatedRustc::verify(resolve_rustc()?)
+}
+
+/// `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER` in the environment: the driver
+/// needs that slot, and unlike a configured wrapper (which is blanked) an
+/// environment one is the caller saying "run my program here", so it is refused.
+pub(crate) fn reject_wrapper_env(report_path: &Path) -> Result<()> {
+    if env::var_os("RUSTC_WRAPPER").is_some() || env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some() {
+        return Err(refuse(
+            report_path,
+            "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn sysroot_lib_dir(rustc: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(rustc_sysroot(rustc)?).join("lib"))
 }
@@ -172,6 +238,35 @@ mod tests {
         let result = verify_pinned_toolchain(&fake_rustc.to_string_lossy());
         std::fs::remove_dir_all(directory)?;
         result
+    }
+
+    /// What a `ValidatedRustc` carries is exactly the path that was probed, in
+    /// both spellings, so nothing downstream can use a different compiler.
+    #[test]
+    fn a_validated_rustc_is_the_path_that_passed_the_probe() -> Result<()> {
+        let _guard = FAKE_RUSTC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let directory =
+            std::env::temp_dir().join(format!("cargo_no_alloc_validated_{}", std::process::id()));
+        std::fs::create_dir_all(&directory)?;
+        let fake_rustc = directory.join("rustc");
+        std::fs::write(
+            &fake_rustc,
+            "#!/bin/sh\nprintf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+        )?;
+        let mut permissions = std::fs::metadata(&fake_rustc)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_rustc, permissions)?;
+
+        let validated = ValidatedRustc::verify(fake_rustc.clone());
+        std::fs::remove_dir_all(directory)?;
+        let validated = validated?;
+        assert_eq!(validated.path(), fake_rustc);
+        assert_eq!(Path::new(validated.as_str()), fake_rustc);
+        // A compiler that fails the probe never becomes one.
+        assert!(ValidatedRustc::verify(PathBuf::from("/nonexistent/rustc")).is_err());
+        Ok(())
     }
 
     #[test]

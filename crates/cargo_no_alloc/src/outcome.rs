@@ -2,11 +2,12 @@
 //! trusted, and saying so on stderr.
 
 use crate::cli::StdMode;
-use anyhow::{Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use no_alloc_report::{PanicStrategy, Report, ReportFragment, Verdict};
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::path::Path;
+use std::process::ExitStatus;
 
 // Printed unconditionally (not just under --warn-only) because a clean exit
 // with zero roots checked is not a passing result, just an unverified one —
@@ -152,6 +153,84 @@ pub(crate) fn aggregate(fragment_dir: &Path, requested: &BTreeSet<String>) -> Re
         report,
         any_immediate_abort,
     })
+}
+
+/// Refuses the run if configuration reported reasons it cannot be checked
+/// faithfully: records them in `report.json` (not only on stderr, the same
+/// way a mixed sysroot is) and bails before anything is built.
+pub(crate) fn refuse_configuration(report_path: &Path, rejections: Vec<String>) -> Result<()> {
+    if rejections.is_empty() {
+        return Ok(());
+    }
+    let report = rejected_report(rejections);
+    report
+        .write_to_file(report_path)
+        .context("failed to write final report.json")?;
+    for error in &report.selection_errors {
+        eprintln!("error: {error}");
+    }
+    bail!("this build's configuration cannot be checked faithfully; nothing was built");
+}
+
+/// Everything after the build: taint, record, report, and decide the exit.
+///
+/// The order is load-bearing. `taint_report_for_failed_build` only adds its
+/// line if the report still `is_success()`, so it must run after the mixed
+/// sysroot taint; both go in before the write, so the file and the exit
+/// status agree; and the write precedes every `bail` so the evidence survives
+/// a failure, `--warn-only` or not.
+pub(crate) fn finalize(
+    mut report: Report,
+    report_path: &Path,
+    cargo_status: ExitStatus,
+    mixed_sysroot: bool,
+    warn_only: bool,
+) -> Result<()> {
+    // The pre-flight guard reads the environment, and the strategy can also
+    // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
+    // plus a profile), `config.toml`, or `--profile`. The mixed-sysroot check
+    // asks the build itself: the driver recorded the strategy rustc actually
+    // used, so a mixed configuration is caught however it was selected.
+    //
+    // Recorded into `selection_errors` before the report is written, not
+    // just raised as a hard error afterward: `Report::is_success()` would
+    // otherwise say `true` for a persisted `report.json` whose roots all
+    // passed, even though those verdicts were produced against a sysroot
+    // that was never rebuilt to match. A tool reading the file directly
+    // (rather than this process's own exit code) needs the taint to be
+    // in the artifact, not only on stderr.
+    taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
+    taint_report_for_failed_build(&mut report, cargo_status.success());
+    // Persisted like the taints above, but as a warning: the exit status
+    // stays 0 (a workspace may legitimately have no markers), yet a reader of
+    // `report.json` alone must not take `roots: []`, or a list of roots that
+    // were never instantiated, for a verified pass.
+    if !report.checked_an_instance() {
+        report.warnings.push(ZERO_ROOTS_WARNING.to_owned());
+    }
+    report
+        .write_to_file(report_path)
+        .context("failed to write final report.json")?;
+    print_summary(&report, warn_only);
+    // The report is written first (above), so the evidence survives this
+    // failure regardless of `--warn-only` — a mixed sysroot invalidates the
+    // very mechanism `--warn-only` relies on to interpret results, so unlike
+    // an ordinary finding it is never downgraded to a warning.
+    ensure!(
+        !mixed_sysroot,
+        "this build compiled with `-Cpanic=immediate-abort` against the precompiled standard \
+         library, which carries its own panic runtime — so the report's verdicts would claim \
+         panic paths that lower to `abort` when std's do not. Pass `--immediate-abort`, which \
+         applies the strategy to both halves, or `--build-std` if you are setting the \
+         strategy yourself (see docs/iterators.md)"
+    );
+    if !cargo_status.success() {
+        bail!("Cargo exited with {cargo_status}");
+    }
+    if !warn_only && !report.is_success() {
+        bail!("no_alloc check failed");
+    }
+    Ok(())
 }
 
 /// What the user sees on stderr once the report is on disk: each selection
@@ -392,5 +471,135 @@ mod tests {
         let report = rejected_report(vec!["b".to_owned(), "a".to_owned(), "a".to_owned()]);
         assert!(!report.is_success());
         assert_eq!(report.selection_errors, ["a", "b"]);
+    }
+
+    fn status(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(code << 8)
+    }
+
+    /// A report with one passing, checked root.
+    fn passing_report() -> Report {
+        Report {
+            roots: vec![RootVerdict {
+                root: "a".into(),
+                instance: "a".into(),
+                verdict: Verdict::Pass,
+                environment: Some(Environment {
+                    panic_strategy: PanicStrategy::Unwind,
+                    opt_level: "No".into(),
+                    mir_opt_level: 1,
+                    overflow_checks: true,
+                    debug_assertions: true,
+                    target_triple: "x86_64-unknown-linux-gnu".into(),
+                    rustc_version: "1.99.0-nightly".into(),
+                    all_crates: false,
+                    build_std: false,
+                }),
+            }],
+            panic_strategy: Some(PanicStrategy::Unwind),
+            ..Report::default()
+        }
+    }
+
+    /// Runs `finalize` and returns its result with the report it persisted.
+    fn finalize_in_temp(
+        label: &str,
+        report: Report,
+        cargo_exit: i32,
+        mixed_sysroot: bool,
+        warn_only: bool,
+    ) -> Result<(Result<()>, Report)> {
+        let directory = std::env::temp_dir().join(format!(
+            "cargo_no_alloc_finalize_{}_{label}",
+            std::process::id()
+        ));
+        let path = directory.join("target/no-alloc/report.json");
+        let result = finalize(report, &path, status(cargo_exit), mixed_sysroot, warn_only);
+        let persisted = serde_json::from_reader(File::open(&path)?)?;
+        fs::remove_dir_all(directory)?;
+        Ok((result, persisted))
+    }
+
+    #[test]
+    fn finalize_passes_a_clean_run_and_persists_it() -> Result<()> {
+        let (result, persisted) = finalize_in_temp("clean", passing_report(), 0, false, false)?;
+        result?;
+        assert!(persisted.is_success());
+        assert!(persisted.warnings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_persists_a_failed_build_before_failing_on_it() -> Result<()> {
+        let (result, persisted) =
+            finalize_in_temp("cargo_failed", passing_report(), 101, false, true)?;
+        // Even `--warn-only` cannot excuse a build that did not finish.
+        let error = result.err().context("a failed build must fail the run")?;
+        assert!(error.to_string().contains("Cargo exited"), "{error}");
+        assert!(!persisted.is_success());
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_taints_in_order_so_a_mixed_sysroot_is_not_double_counted() -> Result<()> {
+        // Both the build and the sysroot are bad: the first taint already
+        // makes the report a failure, so the second must stay silent.
+        let (result, persisted) = finalize_in_temp("mixed", passing_report(), 101, true, true)?;
+        let error = result.err().context("a mixed sysroot must fail the run")?;
+        assert!(
+            error.to_string().contains("precompiled standard"),
+            "{error}"
+        );
+        assert_eq!(persisted.selection_errors.len(), 1, "{persisted:?}");
+        assert!(persisted.selection_errors[0].contains("immediate-abort"));
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_records_a_zero_root_run_as_a_warning_not_a_failure() -> Result<()> {
+        let (result, persisted) =
+            finalize_in_temp("zero_roots", Report::default(), 0, false, false)?;
+        result?;
+        assert!(persisted.is_success());
+        assert_eq!(persisted.warnings, [ZERO_ROOTS_WARNING]);
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_downgrades_findings_only_under_warn_only() -> Result<()> {
+        let failing = || Report {
+            selection_errors: vec!["finding".into()],
+            ..passing_report()
+        };
+        let (strict, persisted) = finalize_in_temp("strict", failing(), 0, false, false)?;
+        assert!(strict.is_err());
+        assert!(!persisted.is_success());
+        let (lenient, persisted) = finalize_in_temp("lenient", failing(), 0, false, true)?;
+        lenient?;
+        // The file still says what happened; only the exit status relents.
+        assert!(!persisted.is_success());
+        Ok(())
+    }
+
+    #[test]
+    fn refuse_configuration_is_a_no_op_without_reasons_and_records_them_otherwise() -> Result<()> {
+        let path = std::env::temp_dir()
+            .join(format!("cargo_no_alloc_refuse_cfg_{}", std::process::id()))
+            .join("target/no-alloc/report.json");
+        refuse_configuration(&path, Vec::new())?;
+        assert!(!path.exists());
+        let error = refuse_configuration(&path, vec!["b".into(), "a".into()])
+            .err()
+            .context("reasons must refuse the run")?;
+        assert!(error.to_string().contains("nothing was built"), "{error}");
+        let persisted: Report = serde_json::from_reader(File::open(&path)?)?;
+        assert_eq!(persisted.selection_errors, ["a", "b"]);
+        fs::remove_dir_all(
+            path.ancestors()
+                .nth(3)
+                .context("report path has a root directory")?,
+        )?;
+        Ok(())
     }
 }

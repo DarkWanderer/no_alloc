@@ -139,16 +139,62 @@ impl Scope {
     }
 }
 
+/// What the command line asked for, before the environment is consulted.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Invocation {
+    std_mode: StdMode,
+    scope: Scope,
+    warn_only: bool,
+    // A set, so "sorted and deduplicated" holds by construction wherever
+    // roots are added (flags, `NO_ALLOC_ROOTS`).
+    roots: BTreeSet<String>,
+    command: CargoCommand,
+    cargo_args: Vec<String>,
+}
+
+/// An [`Invocation`] with the environment's say (`NO_ALLOC_WARN_ONLY`,
+/// `NO_ALLOC_ROOTS`) folded in. A separate type so that nothing downstream can
+/// be handed the half-resolved command line, and `run` never mutates what it
+/// parsed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Config {
     pub(crate) std_mode: StdMode,
     pub(crate) scope: Scope,
     pub(crate) warn_only: bool,
-    // A set, so "sorted and deduplicated" holds by construction wherever
-    // roots are added (flags, `NO_ALLOC_ROOTS`).
     pub(crate) roots: BTreeSet<String>,
     pub(crate) command: CargoCommand,
     pub(crate) cargo_args: Vec<String>,
+}
+
+impl Config {
+    /// The environment can only add: switch warn-only on (exactly `"1"`, like
+    /// the driver reads it) and contribute more roots, never remove either.
+    /// Values come in as arguments so this stays free of process state.
+    pub(crate) fn resolve(
+        invocation: Invocation,
+        warn_only_env: Option<&str>,
+        roots_env: Option<&str>,
+    ) -> Self {
+        let Invocation {
+            std_mode,
+            scope,
+            warn_only,
+            mut roots,
+            command,
+            cargo_args,
+        } = invocation;
+        if let Some(existing) = roots_env {
+            roots.extend(parse_root_spec(existing));
+        }
+        Self {
+            std_mode,
+            scope,
+            warn_only: warn_only || warn_only_env == Some("1"),
+            roots,
+            command,
+            cargo_args,
+        }
+    }
 }
 
 // `--help`/`--version` short-circuit before an `Invocation` can even be
@@ -342,6 +388,33 @@ mod tests {
 
     fn roots_of(inv: &Invocation) -> Vec<&str> {
         inv.roots.iter().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn the_environment_can_add_roots_and_warn_only_but_not_remove_them() -> Result<()> {
+        let inv = || parse(&["cargo-no-alloc", "--root=b::f", "--", "build"]);
+        let plain = Config::resolve(inv()?, None, None);
+        assert!(!plain.warn_only);
+        assert_eq!(plain.roots.len(), 1);
+
+        let merged = Config::resolve(inv()?, Some("1"), Some("a::f, b::f ,c::f"));
+        assert!(merged.warn_only);
+        assert_eq!(
+            merged.roots.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["a::f", "b::f", "c::f"]
+        );
+
+        // Only exactly "1" counts, as in the driver; anything else is no vote.
+        for value in ["0", "true", "", "01"] {
+            assert!(
+                !Config::resolve(inv()?, Some(value), None).warn_only,
+                "{value}"
+            );
+        }
+        // A flag already given on the command line is never switched off.
+        let flagged = parse(&["cargo-no-alloc", "--warn-only", "--", "build"])?;
+        assert!(Config::resolve(flagged, Some("0"), None).warn_only);
+        Ok(())
     }
 
     /// A `--root` value is a list, like `NO_ALLOC_ROOTS`: each entry is its
