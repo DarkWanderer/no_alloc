@@ -45,17 +45,9 @@ fn environment(tcx: TyCtxt<'_>) -> Environment {
 /// Flags the driver needs on every invocation. `cargo-no-alloc` normally
 /// supplies these via `CARGO_ENCODED_RUSTFLAGS`, but the driver re-adds any
 /// that are missing so invoking it directly as `RUSTC=no-alloc-driver` also
-/// works (see docs/design.md, Invocation).
-const REQUIRED_FLAGS: &[&str] = &[
-    "--cfg=no_alloc_check",
-    "--check-cfg=cfg(no_alloc_check)",
-    "-Zcrate-attr=feature(register_tool)",
-    "-Zcrate-attr=register_tool(no_alloc_tool)",
-    "-Zalways-encode-mir",
-    "-Zcrate-attr=feature(rustc_attrs)",
-    "-Zcrate-attr=allow(internal_features)",
-    "-Zcrate-attr=allow(duplicate_features)",
-];
+/// works (see docs/design.md, Invocation). The list itself is the wrapper's,
+/// so the two cannot drift.
+const REQUIRED_FLAGS: &[&str] = cargo_no_alloc::REQUIRED_RUSTFLAGS;
 
 struct NoAllocCallbacks;
 

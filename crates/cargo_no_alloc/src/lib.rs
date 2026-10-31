@@ -1,7 +1,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use fs2::FileExt;
 use no_alloc_report::{parse_root_spec, PanicStrategy, Report, ReportFragment, Verdict};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -72,7 +72,10 @@ const IMMEDIATE_ABORT_RUSTFLAGS: &[&str] = &["-Zunstable-options", "-Cpanic=imme
 /// a mixed configuration from being *reported* either way.
 const TEST_HARNESS_SELECTORS: &[&str] = &["--tests", "--all-targets"];
 
-const REQUIRED_RUSTFLAGS: &[&str] = &[
+/// Flags every checked compilation needs. `pub` only so the driver binary
+/// (which re-adds any that are missing when invoked directly) reads this very
+/// list instead of keeping a copy that could drift.
+pub const REQUIRED_RUSTFLAGS: &[&str] = &[
     "--cfg=no_alloc_check",
     "--check-cfg=cfg(no_alloc_check)",
     "-Zcrate-attr=feature(register_tool)",
@@ -90,14 +93,105 @@ const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by cargo.\n\
 # For information about cache directory tags see https://bford.info/cachedir/\n";
 
+/// The Cargo subcommands the analysis can run under. `check` is deliberately
+/// not one: it never reaches codegen, so the mono graph is not populated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CargoCommand {
+    Build,
+    Test,
+}
+
+impl CargoCommand {
+    fn parse(name: &str) -> Result<Self> {
+        ensure!(
+            name != "check",
+            "`cargo check` is unsupported because it does not produce a monomorphized instance graph"
+        );
+        match name {
+            "build" => Ok(Self::Build),
+            "test" => Ok(Self::Test),
+            other => bail!("unsupported Cargo command `{other}`; expected `build` or `test`"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Test => "test",
+        }
+    }
+}
+
+/// Which standard library the checked build links against. The third state
+/// implies the second, which is why this is one enum and not two flags:
+/// "immediate-abort without build-std" is not a representable invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdMode {
+    Precompiled,
+    BuildStd,
+    ImmediateAbort,
+}
+
+impl StdMode {
+    /// Whether the sysroot is rebuilt in this build. This, not the panic
+    /// strategy, is what makes an observed `ImmediateAbort` coherent: a
+    /// hand-set strategy plus plain `--build-std` rebuilds std under the same
+    /// inherited flags, so both the pre-flight guard and the post-build mix
+    /// check key off it.
+    fn rebuilds_std(self) -> bool {
+        self != Self::Precompiled
+    }
+
+    fn selects_immediate_abort(self) -> bool {
+        self == Self::ImmediateAbort
+    }
+}
+
+/// Which crates the driver instruments, and therefore which of Cargo's two
+/// wrapper slots it occupies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Workspace,
+    AllCrates,
+}
+
+impl Scope {
+    /// `(variable, value)` pairs for both wrapper slots. The slot the checker
+    /// is not using is blanked rather than removed: an empty value overrides
+    /// the matching config key (verified on the pinned Cargo), so a wrapper
+    /// configured after the pre-flight check cannot slip in front of the
+    /// driver.
+    fn wrapper_env(self, driver: &Path) -> [(&'static str, OsString); 2] {
+        let driver = driver.as_os_str().to_owned();
+        match self {
+            Self::AllCrates => [
+                ("RUSTC_WRAPPER", driver),
+                ("RUSTC_WORKSPACE_WRAPPER", OsString::new()),
+            ],
+            Self::Workspace => [
+                ("RUSTC_WORKSPACE_WRAPPER", driver),
+                ("RUSTC_WRAPPER", OsString::new()),
+            ],
+        }
+    }
+
+    fn driver_flag(self) -> &'static str {
+        match self {
+            Self::AllCrates => "1",
+            Self::Workspace => "0",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Invocation {
-    build_std: bool,
-    immediate_abort: bool,
-    all_crates: bool,
+    std_mode: StdMode,
+    scope: Scope,
     warn_only: bool,
-    roots: Vec<String>,
-    command: String,
+    // A set, so "sorted and deduplicated" holds by construction wherever
+    // roots are added (flags, `NO_ALLOC_ROOTS`).
+    roots: BTreeSet<String>,
+    command: CargoCommand,
     cargo_args: Vec<String>,
 }
 
@@ -110,6 +204,20 @@ enum ParsedArgs {
     Run(Invocation),
 }
 
+/// One `--root` value: a comma-separated list, split by the same function
+/// that reads `NO_ALLOC_ROOTS` so the two spellings cannot disagree. That
+/// function silently drops empty entries, which is right for an environment
+/// fallback but would hide a typo (`a,,b`) on the command line.
+fn parse_root_value(value: &str) -> Result<Vec<String>> {
+    ensure!(!value.trim().is_empty(), "--root requires a non-empty path");
+    let roots = parse_root_spec(value);
+    ensure!(
+        roots.len() == value.split(',').count(),
+        "--root `{value}` has an empty entry; separate roots with single commas"
+    );
+    Ok(roots)
+}
+
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     let mut args: Vec<_> = args.into_iter().collect();
     if !args.is_empty() {
@@ -120,11 +228,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
         args.remove(0);
     }
 
-    let mut build_std = false;
-    let mut immediate_abort = false;
-    let mut all_crates = false;
+    let mut std_mode = StdMode::Precompiled;
+    let mut scope = Scope::Workspace;
     let mut warn_only = false;
-    let mut roots = Vec::new();
+    let mut roots = BTreeSet::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -132,14 +239,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 index += 1;
                 break;
             }
-            "--build-std" => build_std = true,
+            // Never downgrades `--immediate-abort`, whichever order they come in.
+            "--build-std" => {
+                if std_mode == StdMode::Precompiled {
+                    std_mode = StdMode::BuildStd;
+                }
+            }
             // Implies --build-std: the panic strategy has to match all the
             // way down, and the precompiled sysroot was not built with it.
-            "--immediate-abort" => {
-                immediate_abort = true;
-                build_std = true;
-            }
-            "--all-crates" => all_crates = true,
+            "--immediate-abort" => std_mode = StdMode::ImmediateAbort,
+            "--all-crates" => scope = Scope::AllCrates,
             "--warn-only" => warn_only = true,
             // A cargo subcommand is expected to answer these regardless of
             // what else is on the line, so they exit before anything past
@@ -148,16 +257,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             "--version" | "-V" => return Ok(ParsedArgs::Version),
             "--root" => {
                 index += 1;
-                let root = args
+                let spec = args
                     .get(index)
                     .context("--root requires a non-empty path")?;
-                ensure!(!root.trim().is_empty(), "--root requires a non-empty path");
-                roots.push(root.trim().to_owned());
+                roots.extend(parse_root_value(spec)?);
             }
             value if value.starts_with("--root=") => {
-                let root = value.trim_start_matches("--root=").trim();
-                ensure!(!root.is_empty(), "--root requires a non-empty path");
-                roots.push(root.to_owned());
+                roots.extend(parse_root_value(value.trim_start_matches("--root="))?);
             }
             value if value.starts_with('-') => bail!("unknown checker option `{value}`"),
             _ => break,
@@ -170,25 +276,17 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
         .first()
         .is_none_or(|argument| argument.starts_with('-'))
     {
-        "build".to_owned()
+        CargoCommand::Build
     } else {
-        cargo.remove(0)
+        CargoCommand::parse(&cargo.remove(0))?
     };
-    ensure!(
-        command != "check",
-        "`cargo check` is unsupported because it does not produce a monomorphized instance graph"
-    );
-    ensure!(
-        matches!(command.as_str(), "build" | "test"),
-        "unsupported Cargo command `{command}`; expected `build` or `test`"
-    );
     // Caught here rather than left to rustc, which fails the build several
     // minutes into a sysroot rebuild with `building tests with panic=abort
     // is not supported without -Zpanic_abort_tests`. Cargo's own
     // `-Zpanic-abort-tests` does not help: it keys off the profile's panic
     // setting, and this strategy arrives through RUSTFLAGS instead.
     ensure!(
-        !(immediate_abort && command == "test"),
+        !(std_mode.selects_immediate_abort() && command == CargoCommand::Test),
         "`--immediate-abort` cannot be combined with `-- test`: rustc refuses to build a \
          test harness under an abort panic strategy. Use `-- build`, which is the supported \
          mode for meaningful results anyway (see README, \"Guarantee and limitations\")"
@@ -210,18 +308,15 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
         // which rustc will not build under an abort panic strategy.
         let flag = arg.split('=').next().unwrap_or(arg);
         ensure!(
-            !immediate_abort || !TEST_HARNESS_SELECTORS.contains(&flag),
+            !std_mode.selects_immediate_abort() || !TEST_HARNESS_SELECTORS.contains(&flag),
             "`--immediate-abort` cannot build test-harness targets (`{flag}`): rustc refuses \
              to build a test harness under an abort panic strategy. Drop the target selection, \
              or check those targets without `--immediate-abort`"
         );
     }
-    roots.sort();
-    roots.dedup();
     Ok(ParsedArgs::Run(Invocation {
-        build_std,
-        immediate_abort,
-        all_crates,
+        std_mode,
+        scope,
         warn_only,
         roots,
         command,
@@ -446,8 +541,8 @@ fn declares_immediate_abort(encoded: Option<&str>, plain: Option<&str>) -> bool 
 /// exactly the mix this check exists to catch (a target-specific config
 /// selecting the strategy for the checked crate while a wrapped host unit
 /// compiles under something else).
-fn mixed_sysroot_panic_strategy(build_std: bool, any_immediate_abort: bool) -> bool {
-    !build_std && any_immediate_abort
+fn mixed_sysroot_panic_strategy(std_mode: StdMode, any_immediate_abort: bool) -> bool {
+    !std_mode.rebuilds_std() && any_immediate_abort
 }
 
 /// Marks a report so that `Report::is_success()` says `false` on it, the
@@ -481,11 +576,11 @@ fn taint_report_for_mixed_sysroot(report: &mut Report, mixed_sysroot: bool) {
 /// `inv.immediate_abort` instead rejected that same legitimate combination
 /// before the build ever ran.
 fn ambient_immediate_abort_needs_build_std(
-    build_std: bool,
+    std_mode: StdMode,
     encoded: Option<&str>,
     plain: Option<&str>,
 ) -> bool {
-    !build_std && declares_immediate_abort(encoded, plain)
+    !std_mode.rebuilds_std() && declares_immediate_abort(encoded, plain)
 }
 
 /// Config keys naming a program Cargo would run in front of (or instead of)
@@ -977,7 +1072,7 @@ fn clear_checker_artifacts(
     // `cargo clean --target` probes the compiler too, so a `build.rustc` from
     // config would otherwise run here, before the build's own override.
     clean.env("RUSTC", rustc);
-    if !inv.all_crates {
+    if inv.scope == Scope::Workspace {
         clean.arg("--workspace");
     }
     clean
@@ -1031,6 +1126,14 @@ fn taint_report_for_failed_build(report: &mut Report, cargo_succeeded: bool) {
     }
 }
 
+/// What [`aggregate`] learned from the fragments.
+struct Aggregated {
+    report: Report,
+    /// Whether any verdict-bearing fragment observed `ImmediateAbort`,
+    /// answered from the raw fragments because the merged report cannot say.
+    any_immediate_abort: bool,
+}
+
 /// `Report::merge`'s agreed-strategy answer is the right thing for
 /// `report.json` to state (ADR 0006) — it is silent rather than guessing
 /// when fragments disagree. It is the wrong question for this wrapper's own
@@ -1042,7 +1145,7 @@ fn taint_report_for_failed_build(report: &mut Report, cargo_succeeded: bool) {
 /// exactly that case. So this is answered directly from the fragments,
 /// before merging can lose it: "did *any* verdict-bearing fragment observe
 /// `ImmediateAbort`", regardless of what the others said.
-fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<(Report, bool)> {
+fn aggregate(fragment_dir: &Path, requested: &BTreeSet<String>) -> Result<Aggregated> {
     let mut reports = Vec::new();
     let mut matched = HashSet::new();
     if fragment_dir.is_dir() {
@@ -1071,7 +1174,10 @@ fn aggregate(fragment_dir: &Path, requested: &[String]) -> Result<(Report, bool)
     }
     report.selection_errors.sort();
     report.selection_errors.dedup();
-    Ok((report, any_immediate_abort))
+    Ok(Aggregated {
+        report,
+        any_immediate_abort,
+    })
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
@@ -1130,8 +1236,6 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     }
     if let Ok(existing) = env::var("NO_ALLOC_ROOTS") {
         inv.roots.extend(parse_root_spec(&existing));
-        inv.roots.sort();
-        inv.roots.dedup();
     }
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -1238,7 +1342,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         .or_else(|| (!imported_rustflags.is_empty()).then(|| imported_rustflags.join("\x1f")));
     ensure!(
         !ambient_immediate_abort_needs_build_std(
-            inv.build_std,
+            inv.std_mode,
             ambient_encoded.as_deref(),
             env::var("RUSTFLAGS").ok().as_deref(),
         ),
@@ -1256,7 +1360,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     fs::create_dir_all(&fragment_dir)?;
 
     let mut command = Command::new(&cargo);
-    command.arg(&inv.command);
+    command.arg(inv.command.as_str());
     let split = inv
         .cargo_args
         .iter()
@@ -1268,22 +1372,33 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         .arg(&host)
         .arg("--target-dir")
         .arg(&target_dir);
-    if inv.build_std {
+    if inv.std_mode.rebuilds_std() {
         command.arg("-Zbuild-std");
     }
     command.args(&inv.cargo_args[split..]);
-    add_required_rustflags(&mut command, inv.immediate_abort, &imported_rustflags);
+    add_required_rustflags(
+        &mut command,
+        inv.std_mode.selects_immediate_abort(),
+        &imported_rustflags,
+    );
     command.env("NO_ALLOC_FRAGMENT_DIR", &fragment_dir);
-    command.env("NO_ALLOC_ROOTS", inv.roots.join(","));
+    command.env(
+        "NO_ALLOC_ROOTS",
+        inv.roots.iter().cloned().collect::<Vec<_>>().join(","),
+    );
     // Read back by the driver into each fragment's `Environment` (F4): these
     // are invocation-level flags, not something `Session` exposes, so they
     // have to cross the process boundary as plain env vars like everything
     // else the driver needs from `cargo-no-alloc` itself.
+    command.env("NO_ALLOC_ALL_CRATES", inv.scope.driver_flag());
     command.env(
-        "NO_ALLOC_ALL_CRATES",
-        if inv.all_crates { "1" } else { "0" },
+        "NO_ALLOC_BUILD_STD",
+        if inv.std_mode.rebuilds_std() {
+            "1"
+        } else {
+            "0"
+        },
     );
-    command.env("NO_ALLOC_BUILD_STD", if inv.build_std { "1" } else { "0" });
     // Always set, never removed: a removed variable is a hole Cargo's `[env]`
     // table would fill. The driver treats only exactly "1" as warn-only.
     command.env("NO_ALLOC_WARN_ONLY", if inv.warn_only { "1" } else { "0" });
@@ -1298,20 +1413,15 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         "LD_LIBRARY_PATH",
         combined_ld_library_path(&sysroot_lib, env::var_os("LD_LIBRARY_PATH").as_deref()),
     );
-    // The variable the checker is not using is blanked: an empty value
-    // overrides the matching config key (verified on the pinned Cargo), so
-    // a wrapper configured after the check above ran cannot slip in front of
-    // the driver.
-    if inv.all_crates {
-        command.env("RUSTC_WRAPPER", driver);
-        command.env("RUSTC_WORKSPACE_WRAPPER", "");
-    } else {
-        command.env("RUSTC_WORKSPACE_WRAPPER", driver);
-        command.env("RUSTC_WRAPPER", "");
+    for (name, value) in inv.scope.wrapper_env(&driver) {
+        command.env(name, value);
     }
 
     let cargo_status = cargo_status(command)?;
-    let (mut report, any_immediate_abort) = aggregate(&fragment_dir, &inv.roots)?;
+    let Aggregated {
+        mut report,
+        any_immediate_abort,
+    } = aggregate(&fragment_dir, &inv.roots)?;
     // The pre-flight guard reads the environment, and the strategy can also
     // arrive from the manifest (`cargo-features = ["panic-immediate-abort"]`
     // plus a profile), `config.toml`, or `--profile`. This one asks the
@@ -1325,7 +1435,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // that was never rebuilt to match. A tool reading the file directly
     // (rather than this process's own exit code) needs the taint to be
     // in the artifact, not only on stderr.
-    let mixed_sysroot = mixed_sysroot_panic_strategy(inv.build_std, any_immediate_abort);
+    let mixed_sysroot = mixed_sysroot_panic_strategy(inv.std_mode, any_immediate_abort);
     taint_report_for_mixed_sysroot(&mut report, mixed_sysroot);
     taint_report_for_failed_build(&mut report, cargo_status.success());
     // Persisted like the taints above, but as a warning: the exit status
@@ -1474,16 +1584,16 @@ mod tests {
     fn strips_actual_cargo_subcommand_argv() -> Result<()> {
         assert_eq!(
             parse(&["cargo-no-alloc", "no-alloc", "--", "build"])?.command,
-            "build"
+            CargoCommand::Build
         );
         Ok(())
     }
 
     #[test]
     fn defaults_to_build() -> Result<()> {
-        assert_eq!(parse(&["cargo-no-alloc"])?.command, "build");
+        assert_eq!(parse(&["cargo-no-alloc"])?.command, CargoCommand::Build);
         let with_options = parse(&["cargo-no-alloc", "--", "--release"])?;
-        assert_eq!(with_options.command, "build");
+        assert_eq!(with_options.command, CargoCommand::Build);
         assert_eq!(with_options.cargo_args, ["--release"]);
         Ok(())
     }
@@ -1514,9 +1624,65 @@ mod tests {
             "test",
         ])?;
         assert!(inv.warn_only);
-        assert_eq!(inv.roots, ["a::f", "z::f"]);
-        assert_eq!(inv.command, "test");
+        assert_eq!(roots_of(&inv), ["a::f", "z::f"]);
+        assert_eq!(inv.command, CargoCommand::Test);
         Ok(())
+    }
+
+    fn roots_of(inv: &Invocation) -> Vec<&str> {
+        inv.roots.iter().map(String::as_str).collect()
+    }
+
+    /// A `--root` value is a list, like `NO_ALLOC_ROOTS`: each entry is its
+    /// own root, so each can be matched (and reported) individually.
+    #[test]
+    fn comma_separated_roots_are_split_in_both_spellings() -> Result<()> {
+        let inv = parse(&[
+            "cargo-no-alloc",
+            "--root",
+            " b::g , a::f",
+            "--root=c::h,a::f",
+            "--",
+            "build",
+        ])?;
+        assert_eq!(roots_of(&inv), ["a::f", "b::g", "c::h"]);
+        Ok(())
+    }
+
+    #[test]
+    fn root_values_with_empty_entries_are_errors() {
+        for value in ["a,,b", "a,", ",a", ",", " ", ""] {
+            assert!(
+                parse(&["cargo-no-alloc", "--root", value]).is_err(),
+                "`--root {value}`"
+            );
+            let joined = format!("--root={value}");
+            assert!(parse(&["cargo-no-alloc", &joined]).is_err(), "{joined}");
+        }
+    }
+
+    #[test]
+    fn scope_owns_which_wrapper_slot_is_blanked() {
+        let driver = Path::new("/d/no-alloc-driver");
+        let workspace = Scope::Workspace.wrapper_env(driver);
+        assert_eq!(
+            workspace,
+            [
+                (
+                    "RUSTC_WORKSPACE_WRAPPER",
+                    OsString::from("/d/no-alloc-driver")
+                ),
+                ("RUSTC_WRAPPER", OsString::new()),
+            ]
+        );
+        let all = Scope::AllCrates.wrapper_env(driver);
+        assert_eq!(
+            all,
+            [
+                ("RUSTC_WRAPPER", OsString::from("/d/no-alloc-driver")),
+                ("RUSTC_WORKSPACE_WRAPPER", OsString::new()),
+            ]
+        );
     }
 
     #[test]
@@ -1607,15 +1773,23 @@ mod tests {
     #[test]
     fn immediate_abort_implies_build_std() -> Result<()> {
         let inv = parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"])?;
-        assert!(inv.immediate_abort);
+        assert!(inv.std_mode.selects_immediate_abort());
         // Rebuilding the sysroot is not optional here: the precompiled one
         // was built with a different panic strategy, and mixing them is
         // exactly what this flag exists to avoid.
-        assert!(inv.build_std);
+        assert!(inv.std_mode.rebuilds_std());
         // --build-std on its own must not turn the panic strategy on.
         let inv = parse(&["cargo-no-alloc", "--build-std", "--", "build"])?;
-        assert!(inv.build_std);
-        assert!(!inv.immediate_abort);
+        assert!(inv.std_mode.rebuilds_std());
+        assert!(!inv.std_mode.selects_immediate_abort());
+        // Flag order must not matter: `--build-std` never downgrades.
+        for order in [
+            ["--immediate-abort", "--build-std"],
+            ["--build-std", "--immediate-abort"],
+        ] {
+            let inv = parse(&["cargo-no-alloc", order[0], order[1], "--", "build"])?;
+            assert_eq!(inv.std_mode, StdMode::ImmediateAbort, "{order:?}");
+        }
         Ok(())
     }
 
@@ -1716,7 +1890,10 @@ mod tests {
         }
         .write_to_file(&directory.join("host.json"))?;
 
-        let (report, any_immediate_abort) = aggregate(&directory, &[])?;
+        let Aggregated {
+            report,
+            any_immediate_abort,
+        } = aggregate(&directory, &BTreeSet::new())?;
         // The report itself is silent about the disagreement, as designed...
         assert_eq!(report.panic_strategy, None);
         assert_eq!(report.roots.len(), 2);
@@ -1724,7 +1901,10 @@ mod tests {
         assert!(report.selection_errors.is_empty());
         // ...but the safety-net signal still catches the mix.
         assert!(any_immediate_abort);
-        assert!(mixed_sysroot_panic_strategy(false, any_immediate_abort));
+        assert!(mixed_sysroot_panic_strategy(
+            StdMode::Precompiled,
+            any_immediate_abort
+        ));
 
         std::fs::remove_dir_all(directory)?;
         Ok(())
@@ -1777,20 +1957,21 @@ mod tests {
         // `--immediate-abort`, ambient flags already selecting the
         // strategy — coherent, and must not be pre-flight rejected.
         assert!(!ambient_immediate_abort_needs_build_std(
-            true,
+            StdMode::BuildStd,
             Some("-Cpanic=immediate-abort"),
             None
         ));
         // Neither flag: still a real mix, still rejected.
         assert!(ambient_immediate_abort_needs_build_std(
-            false,
+            StdMode::Precompiled,
             Some("-Cpanic=immediate-abort"),
             None
         ));
         // No ambient strategy at all: nothing to reject regardless of
         // `--build-std`.
-        assert!(!ambient_immediate_abort_needs_build_std(false, None, None));
-        assert!(!ambient_immediate_abort_needs_build_std(true, None, None));
+        for mode in [StdMode::Precompiled, StdMode::BuildStd] {
+            assert!(!ambient_immediate_abort_needs_build_std(mode, None, None));
+        }
     }
 
     #[test]
@@ -1798,12 +1979,13 @@ mod tests {
         // The dangerous case: crate compiled immediate-abort, sysroot left
         // precompiled (manifest/config selected the strategy, `--build-std`
         // was not passed).
-        assert!(mixed_sysroot_panic_strategy(false, true));
+        assert!(mixed_sysroot_panic_strategy(StdMode::Precompiled, true));
         // `--build-std` rebuilds the sysroot under the same flags, so the
         // same observation is coherent once it is set.
-        assert!(!mixed_sysroot_panic_strategy(true, true));
+        assert!(!mixed_sysroot_panic_strategy(StdMode::BuildStd, true));
+        assert!(!mixed_sysroot_panic_strategy(StdMode::ImmediateAbort, true));
         // Nothing observed has nothing to be mixed with.
-        assert!(!mixed_sysroot_panic_strategy(false, false));
+        assert!(!mixed_sysroot_panic_strategy(StdMode::Precompiled, false));
     }
 
     #[test]
@@ -1935,9 +2117,9 @@ mod tests {
             "--root=z::f",
             "build",
         ])?;
-        assert!(invocation.build_std);
-        assert!(invocation.all_crates);
-        assert_eq!(invocation.roots, ["z::f"]);
+        assert_eq!(invocation.std_mode, StdMode::BuildStd);
+        assert_eq!(invocation.scope, Scope::AllCrates);
+        assert_eq!(roots_of(&invocation), ["z::f"]);
         Ok(())
     }
 
@@ -2083,9 +2265,14 @@ mod tests {
         }
         .write_to_file(&directory.join("fragment.json"))?;
 
-        let (report, any_immediate_abort) = aggregate(
+        let Aggregated {
+            report,
+            any_immediate_abort,
+        } = aggregate(
             &directory,
-            &["matched::root".into(), "missing::root".into()],
+            &["matched::root".to_owned(), "missing::root".to_owned()]
+                .into_iter()
+                .collect(),
         )?;
         assert_eq!(report.selection_errors.len(), 1);
         assert!(report.selection_errors[0].contains("missing::root"));
@@ -2101,7 +2288,10 @@ mod tests {
             std::process::id(),
             line!()
         ));
-        let (report, any_immediate_abort) = aggregate(&directory, &[])?;
+        let Aggregated {
+            report,
+            any_immediate_abort,
+        } = aggregate(&directory, &BTreeSet::new())?;
         assert_eq!(report, Report::default());
         assert!(!any_immediate_abort);
         Ok(())
@@ -2177,27 +2367,6 @@ mod tests {
             .filter_map(|line| line.split_once('='))
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
             .collect()
-    }
-
-    /// The names `REQUIRED_RUSTFLAGS` and the driver's own list must agree
-    /// on: the driver re-adds any that are missing, so a flag in only one of
-    /// them makes direct driver use build a different program.
-    #[test]
-    fn required_rustflags_match_the_drivers_list() -> Result<()> {
-        let source = include_str!("bin/no-alloc-driver.rs");
-        let start = source
-            .find("const REQUIRED_FLAGS")
-            .context("driver has no REQUIRED_FLAGS")?;
-        let list = &source[start..];
-        let list = &list[..list.find("];").context("unterminated REQUIRED_FLAGS")?];
-        let driver: Vec<&str> = list
-            .lines()
-            .skip(1)
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .filter_map(|line| line.split('"').nth(1))
-            .collect();
-        assert_eq!(driver, REQUIRED_RUSTFLAGS);
-        Ok(())
     }
 
     #[test]
