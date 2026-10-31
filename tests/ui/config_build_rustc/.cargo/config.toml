@@ -1,2 +1,2 @@
 [build]
-rustc = "./fail-rustc.sh"
+rustc = "./rustc"

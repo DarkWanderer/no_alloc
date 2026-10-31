@@ -50,6 +50,7 @@ dependencies = [
  "no_alloc_analysis",
  "no_alloc_report",
  "serde_json",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

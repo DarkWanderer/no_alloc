@@ -43,10 +43,13 @@ Options:
 // Printed unconditionally (not just under --warn-only) because a clean exit
 // with zero roots checked is not a passing result, just an unverified one —
 // see the README's "By default only workspace members are instrumented".
+// Also the message when roots were found but none was instantiated: those
+// report `not_instantiated`, which is success without a verdict.
 const ZERO_ROOTS_WARNING: &str = "no_alloc checked 0 root instances \
 — nothing was analyzed. This usually means either no `#[no_alloc]` marker \
-was reached while building, or the marker lives in a crate outside the \
-workspace (pass --all-crates to instrument it).";
+was reached while building, every marked generic function was never \
+instantiated (reported `not_instantiated`), or the marker lives in a crate \
+outside the workspace (pass --all-crates to instrument it).";
 
 /// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
 /// unstable, hence the accompanying `-Zunstable-options`. Passing it here
@@ -79,6 +82,9 @@ const REQUIRED_RUSTFLAGS: &[&str] = &[
     // `rustc_attrs` (for `#[rustc_no_mir_inline]` on markers) is an internal
     // feature; without this every checked crate warns about it.
     "-Zcrate-attr=allow(internal_features)",
+    // A crate that already has `#![feature(rustc_attrs)]` would otherwise
+    // fail the deny-by-default `duplicate_features` lint on the copy above.
+    "-Zcrate-attr=allow(duplicate_features)",
 ];
 const CACHE_DIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by cargo.\n\
@@ -491,14 +497,10 @@ fn ambient_immediate_abort_needs_build_std(
 /// own config key), so a configured wrapper (sccache in `~/.cargo/config.toml`)
 /// cannot take effect and refusing would only block users for nothing.
 ///
-/// `build.rustc` is in the sweep for the same reason: the build is handed the
-/// validated toolchain `rustc` through `RUSTC`, which outranks the config key,
-/// so a configured substitute cannot take effect either.
-const WRAPPER_CONFIG_KEYS: &[&str] = &[
-    "build.rustc-wrapper",
-    "build.rustc-workspace-wrapper",
-    "build.rustc",
-];
+/// `build.rustc` is deliberately not here: the shipped build would use the
+/// configured compiler (a script adding `--cfg` flags, say) while the checked
+/// build runs the toolchain `rustc`, so it is refused (`build_rustc_rejection`).
+const WRAPPER_CONFIG_KEYS: &[&str] = &["build.rustc-wrapper", "build.rustc-workspace-wrapper"];
 
 /// What `cargo config get` said about one key. `Unset` is a successful
 /// answer; anything else Cargo did not understand is an error, never
@@ -706,6 +708,120 @@ fn build_target_rejection(targets: &[String]) -> String {
     )
 }
 
+/// The refusal for a configured `build.rustc`. The checked build compiles
+/// with the toolchain's own `rustc` while `cargo build` would run the
+/// configured one, which can differ in anything (extra `--cfg`/`-C` flags),
+/// so verdicts could describe a different program than the one shipped.
+fn build_rustc_rejection(value: &str) -> String {
+    format!(
+        "Cargo config sets `build.rustc` to {value} (via `[build] rustc` or `--config`), but \
+         the checker compiles with the toolchain's own rustc, so the shipped build could differ \
+         from the checked one (extra `--cfg` flags, say); unset build.rustc"
+    )
+}
+
+/// Manifest keys that give a package its own build target. Cargo's
+/// `cargo-features = ["per-package-target"]` honours them over the CLI-less
+/// default, but the checker always passes `--target <host>`, which replaces
+/// them, so the shipped build and the checked one would target different
+/// platforms. `cargo metadata` does not expose either key on the pinned
+/// Cargo, hence the manifest is read.
+const PER_PACKAGE_TARGET_KEYS: [&str; 2] = ["default-target", "forced-target"];
+
+/// Which of [`PER_PACKAGE_TARGET_KEYS`] a manifest's `[package]` sets.
+fn per_package_target_keys(manifest: &str) -> Result<Vec<&'static str>> {
+    let table: toml::Table = manifest.parse().context("manifest is not valid TOML")?;
+    let package = table.get("package").and_then(toml::Value::as_table);
+    Ok(PER_PACKAGE_TARGET_KEYS
+        .into_iter()
+        .filter(|key| package.is_some_and(|package| package.contains_key(*key)))
+        .collect())
+}
+
+/// Manifest paths of the workspace members in `cargo metadata --no-deps` JSON.
+fn workspace_manifest_paths(json: &str) -> Result<Vec<PathBuf>> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(json).context("`cargo metadata` output is not valid JSON")?;
+    let members: Vec<&str> = metadata["workspace_members"]
+        .as_array()
+        .context("`cargo metadata` output has no `workspace_members`")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let packages = metadata["packages"]
+        .as_array()
+        .context("`cargo metadata` output has no `packages`")?;
+    packages
+        .iter()
+        .filter(|package| {
+            package["id"]
+                .as_str()
+                .is_some_and(|id| members.contains(&id))
+        })
+        .map(|package| {
+            package["manifest_path"]
+                .as_str()
+                .map(PathBuf::from)
+                .context("a workspace package has no `manifest_path`")
+        })
+        .collect()
+}
+
+/// `(package name, keys)` for every workspace member that sets a per-package
+/// target. Honours the build's `--manifest-path` and `--config` so it looks at
+/// the workspace the build will.
+fn workspace_per_package_targets(
+    cargo: &OsString,
+    cargo_args: &[String],
+) -> Result<Vec<(String, Vec<&'static str>)>> {
+    let mut command = Command::new(cargo);
+    command.args(config_override_args(cargo_args));
+    let mut args = cargo_args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--manifest-path" {
+            command.arg(arg).args(args.next());
+        } else if arg.starts_with("--manifest-path=") {
+            command.arg(arg);
+        }
+    }
+    let output = command
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .context("failed to spawn `cargo metadata`")?;
+    ensure!(
+        output.status.success(),
+        "`cargo metadata` failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let mut found = Vec::new();
+    for path in workspace_manifest_paths(&String::from_utf8_lossy(&output.stdout))? {
+        let manifest = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let keys = per_package_target_keys(&manifest)
+            .with_context(|| format!("while reading {}", path.display()))?;
+        if !keys.is_empty() {
+            found.push((path.display().to_string(), keys));
+        }
+    }
+    Ok(found)
+}
+
+fn per_package_target_rejection(found: &[(String, Vec<&str>)]) -> String {
+    let described = found
+        .iter()
+        .map(|(manifest, keys)| {
+            let keys: Vec<String> = keys.iter().map(|key| format!("`{key}`")).collect();
+            format!("`{manifest}` ({})", keys.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "workspace manifest(s) {described} set a per-package target, but the checker owns its \
+         target and always builds for the host, which replaces it, so the shipped build's target \
+         code would go unchecked; remove `default-target` / `forced-target`"
+    )
+}
+
 /// Keys of Cargo's `[env]` table that the checker reserves. Cargo fills any
 /// unset variable of a spawned process from `[env]` (and overwrites set ones
 /// for `force = true`), so an entry here can steer the driver — flip
@@ -760,12 +876,9 @@ fn wrapper_warning(key: &str, line: &str) -> String {
         .and_then(|rest| rest.rsplit_once(" # "))
         .map(|(value, origin)| format!("set to {} from {origin}", value.trim()))
         .unwrap_or_else(|| format!("({line})"));
-    let reason = if key == "build.rustc" {
-        "the checker compiles with the toolchain's own rustc"
-    } else {
-        "the driver must be the only program wrapping rustc"
-    };
-    format!("ignoring `{key}` {described} for this run: {reason}")
+    format!(
+        "ignoring `{key}` {described} for this run: the driver must be the only program wrapping rustc"
+    )
 }
 
 /// Warnings for wrapper keys Cargo config (or its `CARGO_BUILD_*` environment
@@ -1027,10 +1140,23 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     // that was not checked.
     let config_args = config_override_args(&inv.cargo_args);
     // Neutralised below by blanking the wrapper variables, so only a warning.
+    // (`build.rustc` is not: see `WRAPPER_CONFIG_KEYS`.)
     for warning in configured_wrappers(&cargo, &config_args)? {
         eprintln!("warning: {warning}");
     }
     let mut rejections = Vec::new();
+    if let Some(json) = cargo_config_get(
+        &cargo,
+        &config_args,
+        "build.rustc",
+        &["--format", "json-value"],
+    )? {
+        // An empty value is Cargo's "unset".
+        let value = json.trim();
+        if value != "\"\"" && !value.is_empty() {
+            rejections.push(build_rustc_rejection(value));
+        }
+    }
     if let Some(json) = cargo_config_get(
         &cargo,
         &config_args,
@@ -1041,6 +1167,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         if !targets.is_empty() {
             rejections.push(build_target_rejection(&targets));
         }
+    }
+    let per_package_targets = workspace_per_package_targets(&cargo, &inv.cargo_args)?;
+    if !per_package_targets.is_empty() {
+        rejections.push(per_package_target_rejection(&per_package_targets));
     }
     if let Some(json) = cargo_config_get(&cargo, &config_args, "env", &["--format", "json-value"])?
     {
@@ -1191,8 +1321,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     taint_report_for_failed_build(&mut report, cargo_status.success());
     // Persisted like the taints above, but as a warning: the exit status
     // stays 0 (a workspace may legitimately have no markers), yet a reader of
-    // `report.json` alone must not take `roots: []` for a verified pass.
-    if report.roots.is_empty() {
+    // `report.json` alone must not take `roots: []`, or a list of roots that
+    // were never instantiated, for a verified pass.
+    if !report.checked_an_instance() {
         report.warnings.push(ZERO_ROOTS_WARNING.to_owned());
     }
     report
@@ -1213,9 +1344,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         "no_alloc: checked {} root instance(s), {failures} finding(s)",
         report.roots.len()
     );
-    // 0 roots is a silent-pass hazard, not a clean pass: it exits 0 and
+    // No verdict at all (0 roots, or only `not_instantiated` ones) is a silent-pass hazard, not a clean pass: it exits 0 and
     // looks identical to "everything checked out" unless called out here.
-    if report.roots.is_empty() {
+    if !report.checked_an_instance() {
         eprintln!("warning: {ZERO_ROOTS_WARNING}");
     }
     // The report is written first (above), so the evidence survives this
@@ -1834,8 +1965,9 @@ mod tests {
     }
 
     #[test]
-    fn zero_roots_warning_names_the_two_likely_causes() {
+    fn zero_roots_warning_names_the_likely_causes() {
         assert!(ZERO_ROOTS_WARNING.contains("--all-crates"));
+        assert!(ZERO_ROOTS_WARNING.contains("not_instantiated"));
         assert!(ZERO_ROOTS_WARNING.contains("0 root instances"));
         // Printed with a `warning:` prefix and persisted without one.
         assert!(!ZERO_ROOTS_WARNING.starts_with("warning:"));
@@ -2021,7 +2153,7 @@ mod tests {
         let fake_cargo = directory.join("cargo");
         std::fs::write(
             &fake_cargo,
-            "#!/bin/sh\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\necho \"$NO_ALLOC_WARN_ONLY|$RUSTC|$NO_ALLOC_EXPECTED_RUSTC\" > env.log\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
+            "#!/bin/sh\nif [ \"$1\" = metadata ]; then echo '{\"packages\":[],\"workspace_members\":[]}'; exit 0; fi\nif [ \"$2\" = config ]; then echo \"error: config value is not set\" >&2; exit 101; fi\nif [ \"$1\" = clean ]; then echo \"$@\" >> clean.log; exit 0; fi\necho \"$NO_ALLOC_WARN_ONLY|$RUSTC|$NO_ALLOC_EXPECTED_RUSTC\" > env.log\nmkdir -p \"$NO_ALLOC_FRAGMENT_DIR\"\nprintf '%s\\n' '{\"report\":{\"roots\":[]},\"matched_root_specs\":[\"fake::root\"]}' > \"$NO_ALLOC_FRAGMENT_DIR/fake.json\"\nif [ \"$FAKE_CARGO_FAIL\" = 1 ]; then exit 1; fi\n",
         )?;
         for executable in [&fake_rustc, &fake_cargo] {
             let mut permissions = std::fs::metadata(executable)?.permissions();
@@ -2231,14 +2363,50 @@ mod tests {
     }
 
     #[test]
-    fn rustc_config_key_warning_explains_the_toolchain_rustc() {
-        let warning = wrapper_warning(
-            "build.rustc",
-            "build.rustc = \"./my-rustc\" # /p/.cargo/config.toml",
+    fn build_rustc_is_refused_not_warned_about() {
+        let message = build_rustc_rejection("\"./my-rustc\"");
+        assert!(message.contains("`build.rustc`"), "{message}");
+        assert!(message.contains("\"./my-rustc\""), "{message}");
+        assert!(message.contains("toolchain's own rustc"), "{message}");
+        assert!(!WRAPPER_CONFIG_KEYS.contains(&"build.rustc"));
+    }
+
+    #[test]
+    fn per_package_target_keys_are_found_in_the_package_table_only() -> Result<()> {
+        let manifest = "[package]\nname = \"a\"\ndefault-target = \"x\"\nforced-target = \"y\"\n";
+        assert_eq!(
+            per_package_target_keys(manifest)?,
+            ["default-target", "forced-target"]
         );
-        assert!(warning.contains("ignoring `build.rustc`"), "{warning}");
-        assert!(warning.contains("toolchain's own rustc"), "{warning}");
-        assert!(WRAPPER_CONFIG_KEYS.contains(&"build.rustc"));
+        assert!(per_package_target_keys("[package]\nname = \"a\"\n")?.is_empty());
+        // A same-named key elsewhere is not the package setting.
+        assert!(per_package_target_keys(
+            "[package]\nname = \"a\"\n[package.metadata]\ndefault-target = 1\n"
+        )?
+        .is_empty());
+        assert!(per_package_target_keys("[workspace]\nmembers = []\n")?.is_empty());
+        assert!(per_package_target_keys("not toml [").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_manifest_paths_lists_only_members() -> Result<()> {
+        let json = r#"{"workspace_members":["m 0.1.0 (path+file:///w/m)"],
+            "packages":[{"id":"m 0.1.0 (path+file:///w/m)","manifest_path":"/w/m/Cargo.toml"},
+                        {"id":"d 0.1.0 (path+file:///w/d)","manifest_path":"/w/d/Cargo.toml"}]}"#;
+        assert_eq!(
+            workspace_manifest_paths(json)?,
+            [PathBuf::from("/w/m/Cargo.toml")]
+        );
+        assert!(workspace_manifest_paths("{}").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn per_package_target_rejection_names_the_package_and_key() {
+        let message = per_package_target_rejection(&[("app".to_owned(), vec!["default-target"])]);
+        assert!(message.contains("`app`"), "{message}");
+        assert!(message.contains("`default-target`"), "{message}");
     }
 
     #[test]

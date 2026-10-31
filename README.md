@@ -76,10 +76,12 @@ the run is refused (put those flags in `RUSTFLAGS`). A `rustc-wrapper` or
 form) is ignored for the run with a warning, because the driver must be the
 only wrapper; the `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` environment
 variables are refused. The checker compiles with the `rustc` found on `PATH`,
-so `build.rustc` in config is likewise warned about and ignored, and the
-`RUSTC` and `CARGO_BUILD_RUSTC` variables are refused. A configured
+so a configured `build.rustc` is refused (a substitute compiler could add
+`--cfg` flags the checked build would not see), as are the `RUSTC` and
+`CARGO_BUILD_RUSTC` variables. A configured
 `build.target` (`[build] target`, `CARGO_BUILD_TARGET`, `--config`) is
-refused, since the checker always builds for the host. Keys starting
+refused, since the checker always builds for the host; so is a workspace
+member's `default-target` / `forced-target` (`per-package-target`). Keys starting
 `NO_ALLOC_` in Cargo's `[env]` table are refused.
 
 The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
@@ -87,7 +89,7 @@ environment interfaces remain supported. The final deterministic report is
 written to `target/no-alloc/report.json`. Its `warnings` list (omitted when
 empty) holds conditions that leave the exit code at 0 but that a reader of the
 file must not mistake for a verified pass; today that is a run that checked
-zero roots. Each checked root carries a versioned
+zero roots, including one where every root was `not_instantiated`. Each checked root carries a versioned
 `environment` block with its typed panic strategy, optimization and MIR
 optimization levels, target triple, rustc version, and the
 `--all-crates`/`--build-std` settings. These values matter to what was proven,

@@ -446,7 +446,7 @@ const NO_MIR_BODY: &str = "no statically available MIR body for this callee";
 /// shims have synthesized MIR even when the item whose `DefId` they carry is
 /// bodiless. Future rustc variants intentionally fail this match at compile
 /// time until their lowering has been audited (ADR 0003).
-pub(crate) fn resolve_body<'tcx>(
+fn resolve_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<&'tcx Body<'tcx>, String> {
@@ -706,37 +706,6 @@ fn classify_terminator<'tcx>(
     }
 
     edges
-}
-
-/// The statically resolved callees of `instance`'s body, by exactly the edge
-/// rules `visit` applies (unresolved edges contribute nothing here; `visit`
-/// is what reports them). Root discovery uses it to follow calls into
-/// upstream-shared instantiations the local collector never lists, so the
-/// two cannot disagree about what a call resolves to.
-pub(crate) fn resolved_callees<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    instance: Instance<'tcx>,
-    body: &Body<'tcx>,
-) -> Vec<Instance<'tcx>> {
-    let typing_env = ty::TypingEnv::fully_monomorphized();
-    body.basic_blocks
-        .iter()
-        .flat_map(|bb| {
-            let terminator = bb.terminator();
-            classify_terminator(
-                tcx,
-                instance,
-                typing_env,
-                body,
-                &terminator.kind,
-                terminator.source_info.span,
-            )
-        })
-        .filter_map(|edge| match edge {
-            Edge::Resolved(callee, _) => Some(callee),
-            Edge::None | Edge::Unresolved(_) => None,
-        })
-        .collect()
 }
 
 /// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls

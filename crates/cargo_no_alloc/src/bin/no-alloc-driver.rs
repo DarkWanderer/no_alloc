@@ -54,11 +54,18 @@ const REQUIRED_FLAGS: &[&str] = &[
     "-Zalways-encode-mir",
     "-Zcrate-attr=feature(rustc_attrs)",
     "-Zcrate-attr=allow(internal_features)",
+    "-Zcrate-attr=allow(duplicate_features)",
 ];
 
 struct NoAllocCallbacks;
 
 impl Callbacks for NoAllocCallbacks {
+    fn config(&mut self, config: &mut interface::Config) {
+        config.override_queries = Some(|_, providers| {
+            no_alloc_analysis::roots::override_providers(providers);
+        });
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,

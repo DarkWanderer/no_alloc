@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixtures `extern_type_tail`, `weak_linkage_reject`, `async_root_reject`,
   `cross_crate_shared_generic`, `inlined_generic_root`, `config_build_target`,
   `config_build_rustc` and `config_env_no_alloc`.
+- Fixtures `cross_crate_shared_generic_release`,
+  `cross_crate_shared_generic_fnptr`, `async_root_upstream_reject`,
+  `package_default_target` and `existing_rustc_attrs_feature`.
 
 
 ### Fixed
@@ -256,13 +259,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo no-alloc` refuses a configured `build.target` (`[build] target`,
   `CARGO_BUILD_TARGET`, `--config build.target`), which it silently dropped
   while the shipped build compiled different `cfg(target_...)` code.
-- `cargo no-alloc` refuses `RUSTC`/`CARGO_BUILD_RUSTC`, warns about and
-  ignores `build.rustc`, and the driver fails unless its argv[1] is the
+- `cargo no-alloc` refuses `RUSTC`/`CARGO_BUILD_RUSTC` and a configured
+  `build.rustc` (see below), and the driver fails unless its argv[1] is the
   validated `rustc` (`NO_ALLOC_EXPECTED_RUSTC`); a substitute compiler shaped
   the shipped build but not the checked one (ADR 0006).
 - `cargo no-alloc` refuses Cargo `[env]` keys starting `NO_ALLOC_` and always
   sets `NO_ALLOC_WARN_ONLY` (`1` or `0`) instead of removing it, so config
   cannot steer the driver (ADR 0006).
+- A configured `build.rustc` is refused (persisted `selection_errors` entry,
+  nothing built) instead of warned about and ignored: a substitute compiler
+  adding `--cfg heap` shaped `cargo build` but not the checked build, so the
+  report could pass code the shipped build allocates in (ADR 0006).
+- Upstream-shared generic roots are found through the collector's own
+  per-instance neighbour query rather than a Call/Drop-only walk, so a marked
+  root reached through an upstream body at `opt-level = 3` (an
+  `#[inline(never)]` wrapper), through a reify cast to a fn pointer, an unsize
+  cast or a fn item in a const is no longer missed (ADR 0004).
+- A `--root` naming an upstream `async fn` is reported as a selection error
+  instead of being dropped after its spec was marked matched.
+- `cargo no-alloc` refuses a workspace member that sets `default-target` or
+  `forced-target` (`cargo-features = ["per-package-target"]`): the checker's
+  `--target <host>` replaced it, so the shipped build targeted another
+  platform than the one checked.
+- A crate that already has `#![feature(rustc_attrs)]` is checked again: the
+  injected `-Zcrate-attr=feature(rustc_attrs)` made it fail the
+  deny-by-default `duplicate_features` lint, so nothing was checked. The
+  checker now also injects `-Zcrate-attr=allow(duplicate_features)`.
+- The zero-roots warning also fires when every root is `NotInstantiated`.
 - README and ADR 0003/0006: `Unreachable` is no longer described as lowering
   to a `panic_fmt` call (it codegens to a bare LLVM `unreachable`); the
   garbled duplicate sentence in the panic-scope paragraph is fixed; the

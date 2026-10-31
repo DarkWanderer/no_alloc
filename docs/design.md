@@ -28,7 +28,8 @@ The wrapper uses the executable named by `CARGO`, preserves existing Rust
 flags, and ignores (with a warning) rustc-wrapper configuration, since the
 driver must be the only wrapper. It resolves `rustc` from `PATH`, hands that
 path to Cargo as `RUSTC`, and the driver refuses to run if its argv[1] is any
-other compiler; `RUSTC`/`CARGO_BUILD_RUSTC`, a configured `build.target`, and
+other compiler; `RUSTC`/`CARGO_BUILD_RUSTC`, a configured `build.rustc` or
+`build.target`, a member's `default-target`/`forced-target`, and
 `NO_ALLOC_*` keys in Cargo's `[env]` table are refused
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)). An
 exclusive `target/no-alloc.lock` prevents concurrent checker runs in one

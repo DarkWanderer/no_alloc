@@ -138,11 +138,14 @@ variable disables only its own config key. The `RUSTC_WRAPPER` and
 Amended 2026-10-30: the same treatment covers the compiler and target. The
 driver links its own rustc and ignores the binary Cargo passes it, so a
 substitute `rustc` would shape the shipped build and not the checked one.
-`RUSTC` and `CARGO_BUILD_RUSTC` are refused; `build.rustc` is warned about and
-overridden, because the build is handed the `PATH`-resolved, validated `rustc`
-as `RUSTC`; and the driver fails unless its argv[1] is that path
-(`NO_ALLOC_EXPECTED_RUSTC`). A configured `build.target` is refused, since the
-checker always builds `--target <host>`. Cargo's `[env]` table fills any
+`RUSTC`, `CARGO_BUILD_RUSTC` and a configured `build.rustc` are refused (a
+first version warned about and overrode `build.rustc`, which let a script
+adding `--cfg heap` change `cargo build` but not the checked build); the build
+is handed the `PATH`-resolved, validated `rustc` as `RUSTC`, and the driver
+fails unless its argv[1] is that path (`NO_ALLOC_EXPECTED_RUSTC`). A configured
+`build.target`, and a workspace member's `default-target` / `forced-target`
+(read from the manifest, since `cargo metadata` does not expose them), are
+refused, since the checker always builds `--target <host>`. Cargo's `[env]` table fills any
 variable a spawned process leaves unset, so `[env]` keys starting `NO_ALLOC_`
 are refused and `NO_ALLOC_WARN_ONLY` is now always set explicitly (`1` or `0`)
 rather than removed. Pinned by `config_build_rustc`, `config_build_target` and

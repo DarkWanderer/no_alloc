@@ -1,7 +1,14 @@
 #[no_alloc_check::no_alloc]
 #[inline(never)]
 fn root(x: u8) -> u8 {
-    *Box::new(x)
+    #[cfg(heap)]
+    {
+        *Box::new(x)
+    }
+    #[cfg(not(heap))]
+    {
+        x
+    }
 }
 
 fn main() {
