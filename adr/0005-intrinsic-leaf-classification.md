@@ -173,8 +173,7 @@ compiler puts in MIR, not the ones the backend synthesizes from it. Making
 the float and bulk-memory intrinsics reject would not restore soundness
 against a hostile `#[no_mangle]` — it would reject `x.sqrt()` while still
 passing the struct move next to it, which is a worse place to stand than
-stating the boundary plainly. It is stated in `README.md` under "Guarantee
-and limitations".
+stating the boundary plainly. It is stated in `docs/guarantees.md`.
 
 If the project would rather pay that cost — rejecting `sqrt`, `powf`,
 `compare_bytes` and the rest of the libcall-backed entries, and accepting

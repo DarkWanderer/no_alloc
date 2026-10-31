@@ -63,7 +63,7 @@ assume" for unresolved call edges — see
 [ADR 0003](adr/0003-reject-unresolved-edges.md). Do not special-case an edge
 kind into "assume safe" to make a test pass; if a rejection looks wrong,
 either it's a real bug to fix soundly, or it's a documented scope exclusion
-(see README's "Guarantee and limitations") that belongs in the docs, not in
+(see `docs/guarantees.md`) that belongs in the docs, not in
 a special case.
 
 Analysis runs on the monomorphized instance graph

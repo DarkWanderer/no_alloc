@@ -11,7 +11,7 @@ use std::process::ExitStatus;
 
 // Printed unconditionally (not just under --warn-only) because a clean exit
 // with zero roots checked is not a passing result, just an unverified one —
-// see the README's "By default only workspace members are instrumented".
+// see `docs/usage.md`'s "By default only workspace members are instrumented".
 // Also the message when roots were found but none was instantiated: those
 // report `not_instantiated`, which is success without a verdict.
 pub(crate) const ZERO_ROOTS_WARNING: &str = "no_alloc checked 0 root instances \

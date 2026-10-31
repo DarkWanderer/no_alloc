@@ -1,6 +1,6 @@
 //! Regression fixture for F5 (soundness review): `TerminatorKind::TailCall`
 //! (the `become` keyword, `#![feature(explicit_tail_calls)]`) is named in
-//! both the README's guarantee and ADR 0003's terminator table, but had no
+//! both the guarantee (`docs/guarantees.md`) and ADR 0003's terminator table, but had no
 //! fixture exercising it at all.
 
 #![feature(explicit_tail_calls)]

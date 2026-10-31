@@ -13,7 +13,7 @@ pointers, virtual dispatch, foreign callees without MIR, and inline assembly.
 MIR control-flow terminators that do not call anything in MIR are treated as
 safe — but here "safe" means "out of scope for this guarantee", not "proven
 free of allocation". The guarantee is over a root's non-panicking execution
-paths only; `README.md`'s "Guarantee and limitations" states that scope
+paths only; `docs/guarantees.md` states that scope
 explicitly. The exhaustive classification is:
 
 | Terminator | Classification |
@@ -130,7 +130,7 @@ exhaustive matches until explicitly classified. False positives from opaque
 calls are accepted in preference to a false proof. Terminal unwind mechanics
 and `Assert` under a non-unwinding strategy are not proof of "no allocation on
 this path" — they are excluded from the guarantee's scope because they are
-codegen-time calls with no MIR terminator to follow, and `README.md` states
+codegen-time calls with no MIR terminator to follow, and `docs/guarantees.md` states
 that exclusion explicitly. A `--strict-panics` mode that resolves the panic
 lang items and traverses them as real edges would close this gap for plain
 `panic=abort`; it is not implemented. `--immediate-abort` (ADR 0006) closes

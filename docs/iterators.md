@@ -90,8 +90,8 @@ mode that makes 33 patterns pass does not make an allocating one pass.
 
 Under the default `panic = "unwind"`, an `Assert` terminator rejects
 outright ([ADR 0003](../adr/0003-reject-unresolved-edges.md)) — the
-already-documented default-configuration story, and the reason the README
-tells you to set `panic = "abort"` before expecting anything to pass.
+already-documented default-configuration story, and the reason the
+[guarantee doc](guarantees.md) tells you to set `panic = "abort"` before expecting anything to pass.
 
 `panic = "abort"` disposes of the `Assert` problem and gets no further,
 because a panic is not only an `Assert`. `slice::Iter::next` calls
