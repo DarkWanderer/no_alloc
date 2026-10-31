@@ -1,0 +1,6 @@
+[workspace]
+
+[package]
+name = "refused_ambient_immediate_abort"
+version = "0.1.0"
+edition = "2021"

@@ -1,6 +1,7 @@
 //! `no-alloc-driver`: an out-of-tree `rustc_driver` binary substituted in as
 //! cargo's compiler wrapper with real diagnostics (spans, `struct_span_err`
-//! with one `span_note` per chain frame), `report.json`, `NO_ALLOC_WARN_ONLY`,
+//! with one `span_note` per chain frame), a report fragment per compilation
+//! (merged into `report.json` by `cargo-no-alloc`), `NO_ALLOC_WARN_ONLY`,
 //! and errors fail the build. Skips codegen entirely via `Compilation::Stop`
 //! on a hard error — there's no point codegening a crate whose check failed.
 #![feature(rustc_private)]
@@ -20,7 +21,8 @@ use std::path::{Path, PathBuf};
 /// Reads an `NO_ALLOC_*` boolean env var set by `cargo-no-alloc` itself
 /// (`"1"`/`"0"`) — invocation-level flags like `--all-crates`/`--build-std`
 /// aren't visible on `Session`, so they cross the process boundary as env
-/// vars like everything else the driver needs from the wrapper.
+/// vars like everything else the driver needs from the wrapper. Only exactly
+/// `"1"` is true, so an unset or garbled value can never turn a flag on.
 fn env_flag(name: &str) -> bool {
     std::env::var(name).as_deref() == Ok("1")
 }
@@ -36,17 +38,9 @@ fn environment(tcx: TyCtxt<'_>) -> Environment {
 /// Flags the driver needs on every invocation. `cargo-no-alloc` normally
 /// supplies these via `CARGO_ENCODED_RUSTFLAGS`, but the driver re-adds any
 /// that are missing so invoking it directly as `RUSTC=no-alloc-driver` also
-/// works (see docs/design.md, Invocation).
-const REQUIRED_FLAGS: &[&str] = &[
-    "--cfg=no_alloc_check",
-    "--check-cfg=cfg(no_alloc_check)",
-    "-Zcrate-attr=feature(register_tool)",
-    "-Zcrate-attr=register_tool(no_alloc_tool)",
-    "-Zalways-encode-mir",
-    "-Zcrate-attr=feature(rustc_attrs)",
-    "-Zcrate-attr=allow(internal_features)",
-    "-Zcrate-attr=allow(duplicate_features)",
-];
+/// works (see docs/design.md, Invocation). The list itself is the wrapper's,
+/// so the two cannot drift.
+const REQUIRED_FLAGS: &[&str] = cargo_no_alloc::REQUIRED_RUSTFLAGS;
 
 struct NoAllocCallbacks;
 
@@ -62,7 +56,7 @@ impl Callbacks for NoAllocCallbacks {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        let warn_only = std::env::var("NO_ALLOC_WARN_ONLY").as_deref() == Ok("1");
+        let warn_only = env_flag("NO_ALLOC_WARN_ONLY");
         let discovery = no_alloc_analysis::roots::discover(tcx);
         let mut report = Report {
             roots: Vec::new(),

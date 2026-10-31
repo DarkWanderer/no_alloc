@@ -7,8 +7,11 @@
 //! instances/sec so a traversal regression that scales badly with mono
 //! graph size shows up before someone points this at a real workspace.
 
+#[path = "../tests/support/hermetic.rs"]
+mod hermetic;
+
+use hermetic::hermetic_checker;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 const FIXTURE_FN_COUNT: u64 = 1365;
@@ -33,11 +36,9 @@ fn fixture_dir() -> PathBuf {
 }
 
 fn run(bin: &Path, dir: &Path) -> std::process::ExitStatus {
-    Command::new(bin)
+    hermetic_checker(bin)
         .arg("build")
         .current_dir(dir)
-        .env_remove("NO_ALLOC_WARN_ONLY")
-        .env_remove("NO_ALLOC_LOG")
         .status()
         .expect("failed to spawn cargo-no-alloc")
 }
