@@ -53,18 +53,19 @@ configuration reference.
 
 The checker is conservative: unresolved call edges (function pointers,
 virtual dispatch, foreign calls without MIR) are rejected, never assumed
-safe. Allocation reachable only through a panic path is excluded unless you
-pass `--immediate-abort`, which rebuilds the standard library so panics lower
-to a bare abort. The boundary is MIR, not machine code, so symbols the
-backend synthesizes are assumed to be the platform's. `cargo no-alloc -- test`
-is not usable for realistic code. See [`docs/guarantees.md`](docs/guarantees.md)
-for the full statement.
+safe. By default the guarantee is "no allocation on any non-panicking path":
+the walk stops at a standard-library panic entry point (`unwrap_failed`,
+`panic_fmt`, ...) and at bounds and overflow checks. Pass `--strict` to check
+panic paths too; it rebuilds the standard library so panics lower to a bare
+abort, which takes minutes. The boundary is MIR, not machine code, so symbols
+the backend synthesizes are assumed to be the platform's. See
+[`docs/guarantees.md`](docs/guarantees.md) for the full statement.
 
 ## Documentation
 
 - [Usage](docs/usage.md): command line, configuration, and report format
 - [Guarantee and limitations](docs/guarantees.md)
-- [Iterators](docs/iterators.md): what passes under `--immediate-abort`
+- [Iterators](docs/iterators.md): which iterator patterns pass, measured
 - [Design](docs/design.md)
 - [Development](docs/development.md)
 - [Releasing](docs/releasing.md)

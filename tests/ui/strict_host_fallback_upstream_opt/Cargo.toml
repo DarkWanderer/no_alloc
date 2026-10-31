@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["dep", "app"]
+
+# The host twin of `intrinsic_fallback_upstream_opt` (see `app/build.rs`).
+# `upstream_opt_dep` is a build-dependency here, so it is compiled for the
+# host. A per-package profile override takes precedence over
+# `build-override`, so it is optimized on the host too (opt-level 1, which
+# keeps share-generics on), while the build script itself stays at the
+# `build-override` default of opt-level 0.
+[profile.dev.package.upstream_opt_dep]
+opt-level = 1

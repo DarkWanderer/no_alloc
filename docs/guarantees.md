@@ -13,50 +13,74 @@ first among several that may exist; this is correct for a reachability
 claim, but don't read the chain as "this is the line that allocates" without
 checking.
 
-A `mem::swap` of a non-SSA type in a local root can be rejected when a linked
-dependency built at the same opt-level instantiates the same `mem::swap::<T>`
-(share-generics makes it upstream-shared); this is a conservative false
-rejection ([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)).
+For a `mem::swap` of a non-SSA type in a local root, the intrinsic's fallback
+body is walked conservatively when a linked dependency built at the same
+opt-level instantiates the same `mem::swap::<T>` (share-generics makes it
+upstream-shared), even if that dependency lowered the swap in place
+([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)). On the pinned
+sysroot the only edge in that body that can reject is its UB-check panic, so
+this is a visible false rejection only where that panic is both in scope and
+unresolvable: a host unit (build script) under `--strict`. In the default
+mode the panic is out of scope, and on the target under `--strict` it ends
+in `abort`, so the root passes either way.
 
-**The panic exclusion is drawn by terminator shape, not by whether a path
-panics.**
+**Panic paths are out of scope by default.** The default guarantee is *no
+allocation on any non-panicking path*, under the build's own panic strategy
+(`unwind` included) and recorded as `panic_paths: "out_of_scope"` on each
+root's `environment` ([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)).
+Two things end the walk without being followed:
+
+- a call to a standard-library panic entry point named in the audited panic
+  table (`crates/no_alloc_report/src/panic_table.rs`: `panic_fmt`,
+  `unwrap_failed`, `expect_failed`, `slice_index_fail`, the `panic_const_*`
+  overflow lang items, `begin_panic`, ...), matched by defining path;
+- an `Assert` terminator (the implicit check for array bounds, arithmetic
+  overflow, division by zero), whatever the panic strategy.
+
+So `.unwrap()`, `.expect()`, indexing, `panic!()` and iterator chains pass
+when nothing else in them allocates or rejects. This is a scope exclusion, not a proof:
+with `std`, the `#[panic_handler]` formats and prints, `begin_panic` boxes
+its payload, and none of that is examined. What *is* still examined on a
+panicking path: everything the walked code does before calling the entry
+point (a `String` built for a panic message is a violation), and the
+unwinding cleanup of every walked body, the root's and every callee's —
+the traversal visits every basic block of each body it walks, cleanup
+blocks and their drop glue included. Catching a panic needs `catch_unwind`,
+which rejects. Also excluded, because it only runs inside a panic: user
+code that the panic machinery calls, such as a `no_std` crate's own
+`#[panic_handler]` or a hook installed with `std::panic::set_hook`. A diverging function that is not
+a panic (`process::abort`, `process::exit`, `handle_alloc_error`) is not in
+the table and is walked or rejected like any other call.
+
 `UnwindResume` and `UnwindTerminate` have no MIR callee to follow, so the
 traversal treats them as terminal control flow rather than calls — but each
 lowers to a real call during codegen (a foreign `_Unwind_Resume`, or a
 nounwind panic-handler call) that the traversal never walks. `Unreachable`
-codegens to a bare LLVM `unreachable` and contains no code at all. An
-`Assert` terminator (the implicit checks inserted for array bounds,
-arithmetic overflow, and similar cases) is allowed only under a non-unwinding
-panic strategy (`panic=abort`), and that is *not* because the panic runtime
-is unreachable there: a failing assertion under plain `panic=abort` still
-calls `panic_fmt` and the `#[panic_handler]` (which, with `std`, formats and
-prints — i.e. allocates) before the process aborts. It is allowed because
-allocation reachable only through a panic, an unwind-terminate, or an
-unwind-resume path is out of scope for this guarantee, not because that
-allocation has been ruled out. An explicit `panic!()`, `.unwrap()`, or `.expect()` has a
-different MIR shape: it is an ordinary `Call` terminator and remains in scope,
-so an unresolved panic-runtime callee rejects even under `panic=abort`. Under
-`panic=unwind`, `Assert` is rejected outright instead, on the usual
-reject-don't-assume grounds — see [ADR 0003](../adr/0003-reject-unresolved-edges.md)
-for the full terminator classification and rationale.
+codegens to a bare LLVM `unreachable` and contains no code at all. These are
+out of scope in both modes ([ADR 0003](../adr/0003-reject-unresolved-edges.md)).
 
-**`--immediate-abort` is the exception, and the stronger guarantee.** It
-compiles the crate and the standard library with `-Cpanic=immediate-abort`,
-where every panic — including the panic lang item a failing `Assert` calls —
-lowers to a bare `abort()` with no handler call. The traversal then walks
-panic paths, `Assert`'s included, as ordinary edges and
-finds `core::intrinsics::abort` at the end of them, so in that mode there is
-no panic-path carve-out at all. It costs a full sysroot rebuild per run. See
-[ADR 0006](../adr/0006-immediate-abort-checking-mode.md).
+Two panic-related lowerings still reject in the default mode, because the
+panic call they emit appears in no MIR body for the traversal to recognise:
+the validity assertions (`mem::zeroed::<&T>()` and similar, classified per
+instantiation) and a field projection into an extern-type tail.
 
-In practice this means most indexing and arithmetic in debug builds — which
-lower to an `Assert` — reject under `panic=unwind` (Rust's default), and
-`panic = "abort"` in `[profile.*]` is the minimum for anything to pass. It is
-not enough for iterators: the standard library reaches the panic machinery
-through ordinary calls as well as `Assert` terminators, and those reject
-until the sysroot is rebuilt. Measured over 35 iterator patterns, `abort`
-passes none of them and `--immediate-abort` passes 33 — see
-[`docs/iterators.md`](iterators.md).
+**`--strict` checks panic paths too.** It compiles the crate and the standard
+library with `-Cpanic=immediate-abort`, where every panic — including the
+panic lang item a failing `Assert` calls — lowers to a bare `abort()` with no
+handler call. The panic table is not consulted: the traversal walks panic
+paths, `Assert`'s included, as ordinary edges and finds
+`core::intrinsics::abort` at the end of them, so in that mode there is no
+panic-path carve-out at all (`panic_paths: "checked"`). It costs a full
+sysroot rebuild per run, and it cannot be combined with `-- test`. See
+[ADR 0006](../adr/0006-immediate-abort-checking-mode.md). Its verdict is
+about the build the checker made: a crate shipped with `panic = "unwind"` and
+checked with `--strict` still has an allocating panic runtime in its shipped
+binary.
+
+Measured over the 35 iterator patterns in `examples/iterators`, the default
+mode passes 33 under both `panic = "unwind"` and `panic = "abort"`, and
+`--strict` passes the same 33; the other two are a real allocation and a real
+function pointer — see [`docs/iterators.md`](iterators.md).
 
 **The boundary is MIR, not the machine code.** The analysis follows the
 calls the compiler puts in MIR; it does not see the ones the backend
@@ -69,13 +93,11 @@ it does so whether or not any intrinsic is involved. See
 [ADR 0005](../adr/0005-intrinsic-leaf-classification.md) for the measurement
 and the alternative.
 
-**`cargo no-alloc -- test` is not usable for realistic code.** Cargo ignores
-`[profile.*] panic` for the `test` profile — it always builds tests under
-`panic=unwind`, regardless of what the manifest sets — so every `Assert`
-terminator rejects under `-- test` no matter how the profile is configured.
-`-- build` is the supported mode for meaningful results; `-- test` is useful
-only for trivial, assertion-free code and is not a supported path for
-checking real workloads.
+**`cargo no-alloc -- test` checks the code as compiled for tests.** Cargo
+builds tests under `panic=unwind` whatever the profile says, which the
+default mode handles like any other build. `--strict` cannot be combined
+with `-- test` (or `--tests`/`--all-targets`), because rustc refuses to
+build a libtest harness under an abort panic strategy.
 
 Cross-crate generic roots are checked at downstream monomorphization sites.
 Per-rustc fragments are merged deterministically, and unmatched or non-function

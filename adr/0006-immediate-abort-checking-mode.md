@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted 2026-08-25, amended 2026-10-24 and 2026-10-30.
+Accepted 2026-08-25, amended 2026-10-24 and 2026-10-30. Superseded in part
+2026-10-31 by ADR 0008: the flag is now `--strict` (`--immediate-abort` is
+removed), it also tells the analysis to walk panic entry points rather than
+stop at them, and it is no longer the only mode in which realistic code
+passes, since the default now leaves panic paths out of scope. Everything
+below about the strategy, the sysroot rebuild and the guards is unchanged and
+reads with `--strict` in place of `--immediate-abort`; the "Consequences"
+table describes the `--strict` analysis, not the current default.
 
 ## Context
 
@@ -50,7 +57,7 @@ ADR 0005's intrinsic table, the traversal now *walks* the panic path to its
 end and finds `core::intrinsics::abort` there. For `Assert` that means
 resolving the lang item codegen calls and walking it (amended 2026-10-21:
 it was previously skipped as under `panic=abort`, so this mode's claim
-rested on an assumption rather than a check; `tests/ui/assert_immediate_abort`
+rested on an assumption rather than a check; `tests/ui/strict_assert`
 pins it). Nothing is
 excluded from the guarantee in this mode: the panic path is checked, and it
 passes because it genuinely cannot allocate.
@@ -60,7 +67,7 @@ crate's manifest on purpose. The manifest spelling
 (`[profile.dev] panic = "immediate-abort"`) requires
 `cargo-features = ["panic-immediate-abort"]`, which makes the whole manifest
 nightly-only and would break the crate's ordinary stable build — exactly the
-footprint ADR 0002 exists to avoid. `tests/ui/iterator_immediate_abort` is
+footprint ADR 0002 exists to avoid. `tests/ui/strict_iterator` is
 therefore a fixture with an entirely ordinary manifest.
 
 Two guards keep the mode from silently mixing an immediate-abort crate with

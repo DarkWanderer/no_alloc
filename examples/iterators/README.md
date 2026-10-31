@@ -8,20 +8,20 @@ non-allocating code, from `for &x in slice` to `sort_unstable`.
 
 ```bash
 cd examples/iterators
-cargo no-alloc --immediate-abort -- build
+cargo no-alloc -- build
 ```
 
 Expect 33 passes, one rejection — `sort_in_place`, which dispatches through
 a real `fn` pointer inside the sort — and one violation:
 `collects_into_vec`, which really does allocate, reported with the chain
-down to `__rust_alloc_zeroed`.
+down to `__rust_alloc_zeroed`. Panic paths are out of scope in this mode
+([ADR 0008](../../adr/0008-panic-paths-out-of-scope-by-default.md)).
 
-`--immediate-abort` rebuilds the standard library, so the first run takes a
-couple of minutes. It is also what makes any of this checkable: run the same
-command without the flag and all 33 passes become rejections inside the
-panic machinery, which is what
-[ADR 0006](../../adr/0006-immediate-abort-checking-mode.md) is about.
+`cargo no-alloc --strict -- build` checks the panic paths too, by rebuilding
+the standard library with `-Cpanic=immediate-abort`, so it takes a couple of
+minutes. Measured, it gives the same 33 / 1 / 1
+([ADR 0006](../../adr/0006-immediate-abort-checking-mode.md)).
 
 Note that this crate's manifest is entirely ordinary — no
-`cargo-features`, no `[profile.dev] panic`. The checker supplies the panic
+`cargo-features`, no `[profile.dev] panic`. `--strict` supplies the panic
 strategy for its own build, so the crate still builds on stable.

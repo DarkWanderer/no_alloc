@@ -8,6 +8,7 @@
       },
       "environment": {
         "panic_strategy": "abort",
+        "panic_paths": "out_of_scope",
         "opt_level": "No",
         "mir_opt_level": 1,
         "overflow_checks": true,
@@ -20,5 +21,5 @@
     }
   ],
   "panic_strategy": "abort",
-  "schema_version": 2
+  "schema_version": 3
 }

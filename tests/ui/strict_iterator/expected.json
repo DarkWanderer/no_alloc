@@ -1,0 +1,153 @@
+{
+  "roots": [
+    {
+      "root": "strict_iterator::dot",
+      "instance": "dot",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    },
+    {
+      "root": "strict_iterator::largest",
+      "instance": "largest",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    },
+    {
+      "root": "strict_iterator::search",
+      "instance": "search",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    },
+    {
+      "root": "strict_iterator::sorted",
+      "instance": "sorted",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "sorted",
+            "instance": "sorted",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::<impl [T]>::sort_unstable",
+            "instance": "core::slice::<impl [u32]>::sort_unstable",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::sort",
+            "instance": "core::slice::sort::unstable::sort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::ipnsort",
+            "instance": "core::slice::sort::unstable::ipnsort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::quicksort::quicksort",
+            "instance": "core::slice::sort::unstable::quicksort::quicksort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>",
+            "span": null
+          },
+          {
+            "def_path": "core::slice::sort::unstable::quicksort::partition",
+            "instance": "core::slice::sort::unstable::quicksort::partition::<u32, {closure@core::slice::sort::unstable::quicksort::quicksort<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>::{closure#0}}>",
+            "span": null
+          }
+        ],
+        "reason": "callee is a function pointer, not a statically resolvable body"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    },
+    {
+      "root": "strict_iterator::sum_loop",
+      "instance": "sum_loop",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    },
+    {
+      "root": "strict_iterator::windowed",
+      "instance": "windowed",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "immediate_abort",
+        "panic_paths": "checked",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": true
+      }
+    }
+  ],
+  "panic_strategy": "immediate_abort",
+  "schema_version": 3
+}

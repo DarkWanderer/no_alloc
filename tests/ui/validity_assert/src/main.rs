@@ -6,9 +6,11 @@
 //! this traversal can no longer see it, and under `panic = "abort"` it
 //! reaches a panic handler that allocates.
 //!
-//! The passing half needs a rebuilt sysroot for unrelated reasons (the rest
-//! of `mem::zeroed` runs into the same MIR-less panic machinery every
-//! iterator does), so it lives in `iterator_immediate_abort::search`.
+//! This still rejects in the default mode (ADR 0008): the panic call is
+//! synthesized after MIR, so it is not a call to a panic entry point the
+//! traversal could recognise, and is treated like any other unresolved edge.
+//!
+//! The passing half is `strict_iterator::search`, under `--strict`.
 
 #[no_alloc_check::no_alloc]
 #[allow(invalid_value)]

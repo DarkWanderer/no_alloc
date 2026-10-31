@@ -51,7 +51,8 @@ monomorphized root, and a surprise there should be a finding, not an ICE.
 ## Consequences
 
 Measured on [`examples/iterators`](../examples/iterators) under
-`--immediate-abort`, passing roots go from 29 to 33 of 35: `max`,
+`--immediate-abort` (renamed `--strict` on 2026-10-31, ADR 0008), passing
+roots go from 29 to 33 of 35: `max`,
 `min_by_key`, `flat_map(..).count()`, and `.scan(..).last()` become
 checkable. The other 20 fixtures in `tests/ui` are unchanged, including
 `fnptr_reject`, `dyn_reject`, `closure_call`, and the drop-glue cases —
@@ -62,7 +63,7 @@ on the `Virtual` instance and rejects there; a real `fn` pointer still
 rejects, now with the reason attached to the operand whose type actually is
 a pointer. `slice::sort_unstable` is the worked example of that: it dispatches
 its partition implementation through a `fn` pointer, so it rejects on the
-merits (`tests/ui/iterator_immediate_abort::sorted`), where before it
+merits (`tests/ui/strict_iterator::sorted`), where before it
 rejected for the wrong reason at a shim.
 
 The traversal now walks more std internals per root, which costs time and

@@ -8,6 +8,7 @@
       },
       "environment": {
         "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
         "opt_level": "No",
         "mir_opt_level": 1,
         "overflow_checks": true,
@@ -22,33 +23,11 @@
       "root": "closure_call::sum_via_for_loop",
       "instance": "sum_via_for_loop",
       "verdict": {
-        "kind": "rejected",
-        "chain": [
-          {
-            "def_path": "sum_via_for_loop",
-            "instance": "sum_via_for_loop",
-            "span": null
-          },
-          {
-            "def_path": "<std::slice::Iter<'a, T> as std::iter::Iterator>::next",
-            "instance": "<std::slice::Iter<'_, u32> as std::iter::Iterator>::next",
-            "span": null
-          },
-          {
-            "def_path": "core::num::<impl usize>::unchecked_sub::precondition_check",
-            "instance": "core::num::<impl usize>::unchecked_sub::precondition_check",
-            "span": null
-          },
-          {
-            "def_path": "core::panicking::panic_nounwind_fmt",
-            "instance": "core::panicking::panic_nounwind_fmt",
-            "span": null
-          }
-        ],
-        "reason": "no statically available MIR body for this callee"
+        "kind": "pass"
       },
       "environment": {
         "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
         "opt_level": "No",
         "mir_opt_level": 1,
         "overflow_checks": true,
@@ -61,5 +40,5 @@
     }
   ],
   "panic_strategy": "unwind",
-  "schema_version": 2
+  "schema_version": 3
 }

@@ -3,5 +3,5 @@
   "selection_errors": [
     "existing RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER configuration is incompatible with cargo-no-alloc"
   ],
-  "schema_version": 2
+  "schema_version": 3
 }

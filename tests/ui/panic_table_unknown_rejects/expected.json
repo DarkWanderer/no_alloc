@@ -1,0 +1,102 @@
+{
+  "roots": [
+    {
+      "root": "panic_table_unknown_rejects::aborts",
+      "instance": "aborts",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "aborts",
+            "instance": "aborts",
+            "span": null
+          },
+          {
+            "def_path": "std::process::abort",
+            "instance": "std::process::abort",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    },
+    {
+      "root": "panic_table_unknown_rejects::alloc_error",
+      "instance": "alloc_error",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "alloc_error",
+            "instance": "alloc_error",
+            "span": null
+          },
+          {
+            "def_path": "std::alloc::handle_alloc_error",
+            "instance": "std::alloc::handle_alloc_error",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    },
+    {
+      "root": "panic_table_unknown_rejects::exits",
+      "instance": "exits",
+      "verdict": {
+        "kind": "rejected",
+        "chain": [
+          {
+            "def_path": "exits",
+            "instance": "exits",
+            "span": null
+          },
+          {
+            "def_path": "std::process::exit",
+            "instance": "std::process::exit",
+            "span": null
+          }
+        ],
+        "reason": "no statically available MIR body for this callee"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "unwind",
+  "schema_version": 3
+}

@@ -16,12 +16,19 @@
   failing instantiation — those are classified per instantiation in
   `traversal.rs` instead. Unknown names reject, which is the correct default
   — do not "complete a family" to make something pass.
-- Iterators are only checkable under `cargo no-alloc --immediate-abort`
-  ([ADR 0006](adr/0006-immediate-abort-checking-mode.md)); `docs/iterators.md`
-  records what passes, measured from `examples/iterators`. If you change the
-  traversal, re-run that example and update the numbers in the doc, its
-  README, and `examples/iterators/src/main.rs` — they are stated as measured
-  facts, not estimates.
+- The panic entry-point table (`crates/no_alloc_report/src/panic_table.rs`)
+  is an allowlist and a soundness surface like the intrinsic table — see
+  [ADR 0008](adr/0008-panic-paths-out-of-scope-by-default.md). Adding a path
+  asserts that *every* path through that sysroot function ends in a panic;
+  diverging is not enough (`process::abort`, `process::exit`,
+  `handle_alloc_error` must never be added). Keys are crate-qualified
+  defining paths, not `def_path_str` output. The table only applies in the
+  default mode; `--strict` walks panic paths.
+- `docs/iterators.md` records which iterator patterns pass in the default
+  mode and under `--strict`, measured from `examples/iterators`. If you
+  change the traversal, re-run that example in both modes and update the
+  numbers in the doc, its README, and `examples/iterators/src/main.rs` —
+  they are stated as measured facts, not estimates.
 - Analysis runs on the **monomorphized instance graph**
   (`collect_and_partition_mono_items`), not on function definitions. See
   [ADR 0001](adr/0001-mono-site-analysis.md). A verdict is per-instantiation;

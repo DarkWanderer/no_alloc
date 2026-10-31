@@ -35,10 +35,19 @@
 //! `DefId` it stands for — so what has a walkable body is decided by
 //! `InstanceKind`, and call edges resolve from the callee operand's *type*
 //! rather than from whether it is a MIR constant (ADR 0007).
+//!
+//! Panic paths are in or out of scope per run (`PanicPaths`, ADR 0008). Out
+//! of scope, the default, the walk ends at a standard-library panic entry
+//! point named in `no_alloc_report`'s panic table and at every `Assert`
+//! terminator; that is a scope boundary, not a resolution, so nothing else
+//! about what rejects changes with the mode.
 
 use crate::boundary::{panic_strategy, to_frames};
 use crate::leaf::allocates;
-use no_alloc_report::{intrinsic_cannot_reach_allocator, PanicStrategy, RejectReason, Verdict};
+use no_alloc_report::{
+    intrinsic_cannot_reach_allocator, is_panic_entry_point, PanicPaths, PanicStrategy,
+    RejectReason, Verdict,
+};
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::{
     Body, Location, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
@@ -57,12 +66,17 @@ pub struct Checked<'tcx> {
     pub chain_spans: Vec<(Instance<'tcx>, Span)>,
 }
 
-pub fn check_instance<'tcx>(tcx: TyCtxt<'tcx>, root: Instance<'tcx>) -> Checked<'tcx> {
+pub fn check_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: Instance<'tcx>,
+    panic_paths: PanicPaths,
+) -> Checked<'tcx> {
     let mut visited = HashSet::new();
     let mut stack = Vec::new();
     let root_local = tcx.should_codegen_locally(root);
     let root_span = tcx.def_span(root.def_id());
-    match visit(tcx, root, root_local, root_span, &mut visited, &mut stack) {
+    let walk = Walk { tcx, panic_paths };
+    match visit(walk, root, root_local, root_span, &mut visited, &mut stack) {
         None => Checked {
             verdict: Verdict::Pass,
             chain_spans: Vec::new(),
@@ -93,6 +107,14 @@ enum Finding<'tcx> {
     Rejected(Vec<(Instance<'tcx>, Span)>, RejectReason),
 }
 
+/// What stays fixed for one root's walk. Copied into every recursive call so
+/// the panic-path mode cannot differ between a caller and its callees.
+#[derive(Clone, Copy)]
+struct Walk<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    panic_paths: PanicPaths,
+}
+
 /// One MIR edge, after resolving whatever the terminator points at.
 enum Edge<'tcx> {
     /// No edge here (ignored terminator kind, or a `Drop` on a type that
@@ -110,13 +132,14 @@ enum Edge<'tcx> {
 /// `entry_span` is where `instance` was entered from (the root's own
 /// `def_span`, or the call/drop site in its caller).
 fn visit<'tcx>(
-    tcx: TyCtxt<'tcx>,
+    walk: Walk<'tcx>,
     instance: Instance<'tcx>,
     local: bool,
     entry_span: Span,
     visited: &mut HashSet<(Instance<'tcx>, bool)>,
     stack: &mut Vec<(Instance<'tcx>, Span)>,
 ) -> Option<Finding<'tcx>> {
+    let tcx = walk.tcx;
     if !visited.insert((instance, local)) {
         return None;
     }
@@ -131,6 +154,14 @@ fn visit<'tcx>(
         let finding = Finding::Violation(stack.clone());
         stack.pop();
         return Some(finding);
+    }
+    // After the allocator check, for the same reason the intrinsic table is:
+    // no classification may mask an allocator terminal. Before
+    // `resolve_body`, because most entry points have no MIR in the
+    // precompiled sysroot and would otherwise reject.
+    if walk.panic_paths == PanicPaths::OutOfScope && is_panic_entry(tcx, instance) {
+        stack.pop();
+        return None;
     }
     // An intrinsic is fully resolved — the compiler *is* its body — so it is
     // classified against the non-allocating intrinsic table rather than
@@ -156,7 +187,7 @@ fn visit<'tcx>(
                     Some(fallback) => rustc_data_structures::stack::ensure_sufficient_stack(|| {
                         let fallback_local = local && tcx.should_codegen_locally(fallback);
                         visit(
-                            tcx,
+                            walk,
                             fallback,
                             fallback_local,
                             tcx.def_span(def_id),
@@ -208,7 +239,7 @@ fn visit<'tcx>(
         let mut edges = classify_statements(&bb.statements);
         let terminator = bb.terminator();
         edges.extend(classify_terminator(
-            tcx,
+            walk,
             instance,
             typing_env,
             body,
@@ -232,7 +263,7 @@ fn visit<'tcx>(
                         && (matches!(callee.def, InstanceKind::Intrinsic(_))
                             || tcx.should_codegen_locally(callee));
                     match rustc_data_structures::stack::ensure_sufficient_stack(|| {
-                        visit(tcx, callee, callee_local, span, visited, stack)
+                        visit(walk, callee, callee_local, span, visited, stack)
                     }) {
                         Some(Finding::Violation(chain)) => {
                             stack.pop();
@@ -558,13 +589,14 @@ fn classify_statements<'tcx>(statements: &[rustc_middle::mir::Statement<'tcx>]) 
 }
 
 fn classify_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>,
+    walk: Walk<'tcx>,
     instance: Instance<'tcx>,
     typing_env: ty::TypingEnv<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     kind: &TerminatorKind<'tcx>,
     term_span: Span,
 ) -> Vec<Edge<'tcx>> {
+    let tcx = walk.tcx;
     let mut edges = Vec::with_capacity(2);
     match kind {
         TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
@@ -646,6 +678,12 @@ fn classify_terminator<'tcx>(
         TerminatorKind::InlineAsm { .. } => {
             edges.push(Edge::Unresolved(RejectReason::InlineAsm));
         }
+        // A failing assertion is a panic by construction, under every
+        // strategy, so with panic paths out of scope there is nothing to
+        // follow (ADR 0008).
+        TerminatorKind::Assert { .. } if walk.panic_paths == PanicPaths::OutOfScope => {
+            edges.push(Edge::None)
+        }
         // Exhaustive over the panic strategy so a new one must be classified
         // here instead of falling into the scope-exclusion carve-out.
         TerminatorKind::Assert { msg, .. } => match panic_strategy(tcx) {
@@ -701,4 +739,55 @@ fn assert_panic_edge<'tcx>(
             name: lang_item.name().to_string(),
         }),
     }
+}
+
+/// Whether `instance` is a standard-library panic entry point (ADR 0008).
+///
+/// Only a plain `Item` qualifies: a shim carrying the same `DefId` (a reified
+/// `fn` pointer, say) is a different body. The key handed to the table is
+/// the *defining* path, built from the `DefPath` rather than from
+/// `def_path_str`, which prints the visible re-export
+/// (`std::option::unwrap_failed`), drops the crate name for a local item,
+/// and changes with the printing context. And a crate counts as `core`,
+/// `alloc` or `std` only if it defines that library's anchor lang item, so a
+/// user crate (or a dependency) that happens to contain a module path like
+/// `core::panicking` can never match.
+fn is_panic_entry(tcx: TyCtxt<'_>, instance: Instance<'_>) -> bool {
+    let InstanceKind::Item(def_id) = instance.def else {
+        return false;
+    };
+    defining_path(tcx, def_id).is_some_and(|path| is_panic_entry_point(&path))
+}
+
+fn defining_path(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> Option<String> {
+    use rustc_hir::definitions::DefPathData;
+    use rustc_hir::LangItem;
+    let crate_name = tcx.crate_name(def_id.krate);
+    // Lang items are unique across a crate graph (a duplicate is a compile
+    // error), so the crate that defines one of these *is* that library.
+    let anchor = match crate_name.as_str() {
+        "core" => LangItem::PanicFmt,
+        "alloc" => LangItem::OwnedBox,
+        "std" => LangItem::BeginPanic,
+        _ => return None,
+    };
+    if tcx.lang_items().get(anchor).map(|anchor| anchor.krate) != Some(def_id.krate) {
+        return None;
+    }
+    let mut path = crate_name.to_string();
+    for component in tcx.def_path(def_id).data {
+        // A non-zero disambiguator means two items share this name in one
+        // namespace; the table's string cannot say which, so neither matches.
+        if component.disambiguator != 0 {
+            return None;
+        }
+        match component.data {
+            DefPathData::TypeNs(name) | DefPathData::ValueNs(name) => {
+                path.push_str("::");
+                path.push_str(name.as_str());
+            }
+            _ => return None,
+        }
+    }
+    Some(path)
 }

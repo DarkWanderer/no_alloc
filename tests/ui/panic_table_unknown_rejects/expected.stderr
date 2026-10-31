@@ -1,0 +1,52 @@
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+  --> src/main.rs:12:1
+   |
+12 | fn aborts() -> ! {
+   | ^^^^^^^^^^^^^^^^
+   |
+note: via `aborts`
+  --> src/main.rs:12:1
+   |
+12 | fn aborts() -> ! {
+   | ^^^^^^^^^^^^^^^^
+note: via `std::process::abort`
+  --> src/main.rs:13:5
+   |
+13 |     std::process::abort()
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+  --> src/main.rs:22:1
+   |
+22 | fn alloc_error(layout: Layout) -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: via `alloc_error`
+  --> src/main.rs:22:1
+   |
+22 | fn alloc_error(layout: Layout) -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::handle_alloc_error`
+  --> src/main.rs:23:5
+   |
+23 |     std::alloc::handle_alloc_error(layout)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+  --> src/main.rs:17:1
+   |
+17 | fn exits(code: i32) -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: via `exits`
+  --> src/main.rs:17:1
+   |
+17 | fn exits(code: i32) -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::process::exit`
+  --> src/main.rs:18:5
+   |
+18 |     std::process::exit(code)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `panic_table_unknown_rejects` (bin "panic_table_unknown_rejects") due to 3 previous errors

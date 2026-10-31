@@ -4,6 +4,11 @@
 // instance as upstream-shared and the checker walks the fallback body even
 // though `dep` lowered the swap in place. Conservative under ADR 0003.
 //
+// Since ADR 0008 the fallback's only rejecting edge, its UB-check panic, is
+// out of scope in the default mode, so this root now passes and the false
+// rejection is no longer visible here; the conservative walk itself is
+// unchanged.
+//
 // The re-export is what links `dep` into the artifact; without it no upstream
 // instantiation is linked and this root passes.
 pub use shared_swap_dep::swap_big;

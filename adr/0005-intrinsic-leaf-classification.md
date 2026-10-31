@@ -77,7 +77,7 @@ claim to be checked against that toolchain's lowering, not a convenience for
 making a test pass — an intrinsic that takes a function and calls it must
 never be added. `tests/ui/intrinsic_reject` pins the rejecting half,
 `intrinsic_table.rs`'s unit tests pin the excluded names, and
-`tests/ui/validity_assert` plus `iterator_immediate_abort::search` pin the
+`tests/ui/validity_assert` plus `strict_iterator::search` pin the
 two sides of the per-instantiation family.
 
 Because the table is keyed on names from a pinned nightly, a toolchain bump
@@ -147,6 +147,26 @@ on a non-SSA type is then Rejected even though the exporting crate lowered it
 in place. This is conservative and acceptable under ADR 0003;
 `tests/ui/shared_generic_swap_conservative` pins it as a known false
 rejection, not as desired behaviour.
+
+(Amended 2026-10-31, ADR 0008.) On the pinned sysroot the only edge in
+`ptr::swap_nonoverlapping`, the fallback body, that can reject is its
+UB-check panic. In the default mode that panic is out of scope, and on the
+target under `--strict` it ends in `abort`, so walking the fallback and
+skipping it now give the same `Pass`. `intrinsic_fallback`,
+`intrinsic_fallback_upstream_opt` and `shared_generic_swap_conservative`
+therefore no longer observe the walk, the per-caller rule, or the false
+rejection; each now only pins that nothing else in the fallback rejects or
+allocates. What still observes them is a host unit under `--strict`, which
+compiles under `unwind` against the precompiled host sysroot, where the
+panic is in scope and has no MIR: `strict_host_panic_reject` pins the
+fallback walk (`host_swap_large` rejects, `host_swap_scalar` passes), and
+`strict_host_fallback_upstream_opt` pins the per-caller rule (a build script
+at opt-level 0 reusing an opt-level-1 build-dependency's
+`swap_generic::<[u64; 16]>` rejects inside the fallback, while its dead
+local root passes). Cargo's `[profile.dev.package.<dep>]` override takes
+precedence over `build-override`, which is what puts that build-dependency at
+opt-level 1 on the host; verified from the `-v` rustc invocation. The known
+false rejection has no host twin and is currently unobserved.
 
 ### What the table does not cover, and neither does the tool
 

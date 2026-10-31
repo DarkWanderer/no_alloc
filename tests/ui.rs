@@ -16,7 +16,7 @@
 //!
 //! A case may also carry a `checker-args` file — checker flags, one per
 //! line, prepended to the invocation — for a fixture whose subject is a
-//! non-default checker configuration (see `iterator_immediate_abort`), and a
+//! non-default checker configuration (see `strict_iterator`), and a
 //! `checker-env` file — `NAME=value` per line, set after the harness's own
 //! scrubbing — for a fixture whose subject is a refusal caused by the
 //! caller's environment (see `refused_rustc_wrapper`).
@@ -191,7 +191,7 @@ fn normalize(mut report: Report, case_dir: &Path) -> Report {
 /// Per-case checker flags, one per line, from an optional `checker-args`
 /// file in the case directory. Every fixture runs under the checker's
 /// default configuration unless it says otherwise — a case that needs a
-/// non-default one (`--immediate-abort`, which rebuilds std) is stating
+/// non-default one (`--strict`, which rebuilds std) is stating
 /// that as part of what it asserts, not as harness trivia.
 fn checker_args(case_dir: &Path) -> Vec<String> {
     let path = case_dir.join("checker-args");
@@ -501,6 +501,35 @@ fn rejects_check_and_forwards_test_runner_arguments() {
         test.status.success(),
         "{}",
         String::from_utf8_lossy(&test.stderr)
+    );
+}
+
+/// Cargo builds tests under `panic=unwind` whatever the profile says, which
+/// used to reject every `Assert` and every unwrap. With panic paths out of
+/// scope by default (ADR 0008), the test build of code that indexes,
+/// unwraps and iterates is checkable and passes like the ordinary build.
+#[test]
+fn test_mode_checks_panicking_code_by_default() {
+    let _guard = CHECKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let output = checker("panic_out_of_scope", &["--", "test", "--", "--list"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Report = serde_json::from_reader(
+        fs::File::open(ui_dir().join("panic_out_of_scope/target/no-alloc/report.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(!report.roots.is_empty(), "{report:#?}");
+    assert!(
+        report
+            .roots
+            .iter()
+            .all(|root| matches!(root.verdict, Verdict::Pass)),
+        "{report:#?}"
     );
 }
 

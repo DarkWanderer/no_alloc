@@ -3,5 +3,5 @@
   "selection_errors": [
     "RUSTC is set, but the checker compiles with the toolchain's own rustc and cannot honour a substitute: a custom rustc would shape the shipped build and not the checked one. Unset it; the checker owns its compiler"
   ],
-  "schema_version": 2
+  "schema_version": 3
 }

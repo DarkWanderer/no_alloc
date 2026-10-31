@@ -5,6 +5,7 @@ use crate::cli::{Config, Scope, StdMode};
 use crate::rustflags::{add_required_rustflags, AmbientRustflags};
 use crate::toolchain::{combined_ld_library_path, ValidatedRustc};
 use crate::workspace::WorkspacePaths;
+use no_alloc_report::PanicPaths;
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -52,6 +53,13 @@ impl DriverEnv<'_> {
         // else the driver needs from `cargo-no-alloc` itself.
         command.env("NO_ALLOC_ALL_CRATES", scope.driver_flag());
         command.env("NO_ALLOC_BUILD_STD", flag(std_mode.rebuilds_std()));
+        // The traversal's panic-path mode (ADR 0008). Derived from the same
+        // `StdMode` that injects the strategy, so the analysis cannot be
+        // strict over a sysroot that was not rebuilt to abort.
+        command.env(
+            "NO_ALLOC_STRICT",
+            flag(std_mode.panic_paths() == PanicPaths::Checked),
+        );
         command.env("NO_ALLOC_WARN_ONLY", flag(*warn_only));
         // Hand Cargo the rustc that was validated (`RUSTC` outranks
         // `build.rustc`), and tell the driver which one that is so it can
@@ -111,8 +119,7 @@ pub(crate) fn build_command(inputs: &BuildInputs<'_>) -> Command {
         command.arg("-Zbuild-std");
     }
     command.args(runner_args);
-    let (rustflags_var, rustflags) =
-        add_required_rustflags(*ambient, config.std_mode.selects_immediate_abort());
+    let (rustflags_var, rustflags) = add_required_rustflags(*ambient, config.std_mode);
     command.env(rustflags_var, rustflags);
     DriverEnv {
         fragment_dir: &paths.fragment_dir,
@@ -277,6 +284,7 @@ mod tests {
         for name in [
             "NO_ALLOC_ALL_CRATES",
             "NO_ALLOC_BUILD_STD",
+            "NO_ALLOC_STRICT",
             "NO_ALLOC_WARN_ONLY",
         ] {
             assert_eq!(off.var(name), Some("0"), "{name}");
@@ -288,7 +296,7 @@ mod tests {
                 &[
                     "cargo-no-alloc",
                     "--all-crates",
-                    "--immediate-abort",
+                    "--strict",
                     "--root=b::f",
                     "--",
                     "build",
@@ -302,6 +310,7 @@ mod tests {
         for name in [
             "NO_ALLOC_ALL_CRATES",
             "NO_ALLOC_BUILD_STD",
+            "NO_ALLOC_STRICT",
             "NO_ALLOC_WARN_ONLY",
         ] {
             assert_eq!(on.var(name), Some("1"), "{name}");
@@ -311,6 +320,31 @@ mod tests {
             on.var("NO_ALLOC_FRAGMENT_DIR"),
             Some("/w/target/no-alloc/fragments")
         );
+        Ok(())
+    }
+
+    /// `--build-std` rebuilds std without asking for checked panic paths;
+    /// only `--strict` turns the driver's mode on.
+    #[test]
+    fn only_strict_tells_the_driver_to_check_panic_paths() -> Result<()> {
+        let build_std = build(
+            &config(
+                &["cargo-no-alloc", "--build-std", "--", "build"],
+                None,
+                None,
+            )?,
+            None,
+            None,
+        );
+        assert_eq!(build_std.var("NO_ALLOC_BUILD_STD"), Some("1"));
+        assert_eq!(build_std.var("NO_ALLOC_STRICT"), Some("0"));
+        let strict = build(
+            &config(&["cargo-no-alloc", "--strict", "--", "build"], None, None)?,
+            None,
+            None,
+        );
+        assert_eq!(strict.var("NO_ALLOC_STRICT"), Some("1"));
+        assert!(strict.args.iter().any(|arg| arg == "-Zbuild-std"));
         Ok(())
     }
 
@@ -367,11 +401,7 @@ mod tests {
     ) -> Result<()> {
         let plain = AmbientRustflags::Plain("--cfg user".into());
         let built = build(
-            &config(
-                &["cargo-no-alloc", "--immediate-abort", "--", "build"],
-                None,
-                None,
-            )?,
+            &config(&["cargo-no-alloc", "--strict", "--", "build"], None, None)?,
             Some(&plain),
             None,
         );
