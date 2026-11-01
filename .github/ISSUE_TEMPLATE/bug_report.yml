@@ -37,8 +37,8 @@ body:
     attributes:
       label: "`rustc -vV` output"
       description: >-
-        Run `rustc +nightly-2026-08-01 -vV` (substitute whatever toolchain
-        you invoked with). The checker is pinned to `nightly-2026-08-01`
+        Run `rustc +nightly-2026-10-31 -vV` (substitute whatever toolchain
+        you invoked with). The checker is pinned to `nightly-2026-10-31`
         exactly; a toolchain mismatch is the most common cause of unexpected
         failures and is easy to rule out with this.
       render: text

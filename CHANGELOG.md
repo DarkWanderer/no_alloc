@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
+### Changed
+
+- The pinned toolchain moved from `nightly-2026-08-01` to
+  `nightly-2026-10-31` (rustc 1.101.0-nightly, `92b5b8c87`). Users must
+  reinstall the toolchain:
+  `rustup toolchain install nightly-2026-10-31 --component rustc-dev,rust-src,llvm-tools-preview`.
+  Driver changes for the new compiler internals: `rustc_driver::run_compiler`
+  became `compiler_entrypoint`, `TyCtxt::get_attrs_by_path` became
+  `tool_attrs`, `LangItem` moved to `rustc_attr_ir`, the `FnPtrAddr` shim split
+  into `FnPtrAsPtr` and `FnPtrFromPtr` (both still traversed: their bodies are
+  a single transmute), and rustc no longer provides `ensure_sufficient_stack`,
+  so the traversal now recurses on the compiler thread's own stack.
+- Audited the panic table and the intrinsic table against the new sysroot.
+  `abort` is now `abort_immediate`, and the float math intrinsics (`sqrt`,
+  `powf`, `floor`, `fma`, ...) are generic and no longer carry a width suffix;
+  only `copysign`, `minimum`, `maximum` and the `*_nsz_` pair still do. The
+  allowlist spellings were updated to match.
+- Added on audit of the new sysroot: the intrinsics `integer_min` and
+  `integer_max` (behind `Ord::min`/`max` for integers), which the LLVM backend
+  lowers to a direct `llvm.umin`/`smin`/`umax`/`smax` call, with no Rust code
+  called; and the panic entry points `core::panicking::panic_default_msg`,
+  `unreachable_default_msg`, `unimplemented_default_msg` and `todo_default_msg`
+  (what argument-less `panic!()`, `unreachable!()`, `unimplemented!()` and
+  `todo!()` now expand to), each of which is a single tail call to
+  `core::panicking::panic`, so every path ends in a panic.
+  Fixtures `integer_min_max_intrinsic` and `panic_default_msg_entries` cover
+  them.
+
 ## [0.2.0] - 2026-11-01
 
 ### Breaking

@@ -11,7 +11,7 @@
 - `cargo-no-alloc` installs both `cargo-no-alloc` and `no-alloc-driver`.
 
 The rustc-private boundary is kept out of the macro and report crates. The
-driver and analysis require exactly `nightly-2026-08-01` and Linux.
+driver and analysis require exactly `nightly-2026-10-31` and Linux.
 
 ## Invocation
 
@@ -105,7 +105,7 @@ defining path) ends the walk. That is a scope exclusion, not a proof
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
 std with `-Cpanic=immediate-abort`, the table is not consulted: panic paths,
 including the lang item an assertion calls, are real, walkable edges ending
-in `intrinsics::abort` and need no exclusion.
+in `intrinsics::abort_immediate` and need no exclusion.
 [`iterators.md`](iterators.md) is the measured consequence.
 
 ## Verification

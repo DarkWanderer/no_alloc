@@ -15,9 +15,9 @@ note: via `std::ptr::drop_in_place::<dyn Greet>`
  31 |         std::ptr::drop_in_place(value);
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::ptr::drop_glue::<dyn Greet> - shim(Some(dyn Greet))`
-   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:823:14
+   --> <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:839:14
     |
-823 |     unsafe { drop_glue(&mut *to_drop) }
+839 |     unsafe { drop_glue(&mut *to_drop) }
     |              ^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `drop_dyn_arena` (bin "drop_dyn_arena") due to 1 previous error

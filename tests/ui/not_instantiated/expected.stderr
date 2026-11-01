@@ -1,1 +1,10 @@
+warning: unused dependency `uncalled_dep`
+ --> app/Cargo.toml:7:1
+  |
+7 | uncalled_dep = { path = "../dep" }
+  | ^^^^^^^^^^^^
+  |
+  = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `uncalled_dep`
+warning: `uncalled_app` (manifest) generated 1 warning
 warning: no_alloc checked 0 root instances — nothing was analyzed. This usually means either no `#[no_alloc]` marker was reached while building, every marked generic function was never instantiated (reported `not_instantiated`), or the marker lives in a crate outside the workspace (pass --all-crates to instrument it).

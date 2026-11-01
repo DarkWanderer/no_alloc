@@ -15,9 +15,9 @@ note: via `core::slice::<impl [u32]>::sort_unstable`
   68 |     buf.sort_unstable();
      |     ^^^^^^^^^^^^^^^^^^^
 note: via `core::slice::sort::unstable::sort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/mod.rs:3152:9
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/mod.rs:3148:9
      |
-3152 |         sort::unstable::sort(self, &mut T::lt);
+3148 |         sort::unstable::sort(self, &mut T::lt);
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `core::slice::sort::unstable::ipnsort::<u32, for<'a, 'b> fn(&'a u32, &'b u32) -> bool {<u32 as std::cmp::PartialOrd>::lt}>`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/slice/sort/unstable/mod.rs:55:13

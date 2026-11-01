@@ -8,7 +8,7 @@ reaches the panic machinery at almost every step.
 This document is the measured answer: what passes, what does not, and why.
 Everything in the tables comes from
 [`examples/iterators`](../examples/iterators), which is 35 `#[no_alloc]`
-roots you can re-run yourself, measured on `nightly-2026-08-01`.
+roots you can re-run yourself, measured on `nightly-2026-10-31`.
 
 ## The short version
 
@@ -99,7 +99,7 @@ allocating pattern pass.
 - **Verdicts are per-instantiation** ([ADR 0001](../adr/0001-mono-site-analysis.md)).
   `sum::<f32>` passing says nothing about `sum::<MyType>`, whose `Add` impl
   is a different instance.
-- **The tables are pinned to `nightly-2026-08-01`.** They are statements
+- **The tables are pinned to `nightly-2026-10-31`.** They are statements
   about how that toolchain's standard library is written, not about the
   `Iterator` API. A std change to how an adapter is specialized can move a
   pattern from one column to the other; that is what

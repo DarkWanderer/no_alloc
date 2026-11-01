@@ -15,9 +15,9 @@ note: via `std::alloc::realloc`
  13 |     unsafe { realloc(ptr, Layout::new::<[u8; 32]>(), 64) }
     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::alloc::__rust_realloc`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:222:14
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:260:14
     |
-222 |     unsafe { __rust_realloc(ptr, layout.size(), layout.alignment(), new_size) }
+260 |     unsafe { __rust_realloc(ptr, layout.size(), layout.alignment(), new_size) }
     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `realloc_leaf` (bin "realloc_leaf") due to 1 previous error

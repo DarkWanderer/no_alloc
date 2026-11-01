@@ -52,7 +52,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "cargo-no-alloc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "fs2",
@@ -350,14 +350,14 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "no_alloc_analysis"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "no_alloc_report",
 ]
 
 [[package]]
 name = "no_alloc_check"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "no_alloc_harness"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "no_alloc_report",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "no_alloc_report"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",

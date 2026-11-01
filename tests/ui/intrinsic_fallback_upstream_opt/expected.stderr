@@ -1,0 +1,9 @@
+warning: unused dependency `no_alloc_check`
+ --> dep/Cargo.toml:7:1
+  |
+7 | no_alloc_check = { path = "../../../../crates/no_alloc_check" }
+  | ^^^^^^^^^^^^^^
+  |
+  = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `no_alloc_check`
+warning: `upstream_opt_dep` (manifest) generated 1 warning

@@ -71,7 +71,7 @@ library with `-Cpanic=immediate-abort`, where every panic — including the
 panic lang item a failing `Assert` calls — lowers to a bare `abort()` with no
 handler call. The panic table is not consulted: the traversal walks panic
 paths, `Assert`'s included, as ordinary edges and finds
-`core::intrinsics::abort` at the end of them, so in that mode there is no
+`core::intrinsics::abort_immediate` at the end of them, so in that mode there is no
 panic-path carve-out at all (`panic_paths: "checked"`). It costs a full
 sysroot rebuild per run, and it cannot be combined with `-- test`. See
 [ADR 0006](../adr/0006-immediate-abort-checking-mode.md). Its verdict is

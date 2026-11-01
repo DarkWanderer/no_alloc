@@ -16,9 +16,7 @@ fn root_attr_path() -> [Symbol; 2] {
 }
 
 pub fn is_root(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    tcx.get_attrs_by_path(def_id, &root_attr_path())
-        .next()
-        .is_some()
+    tcx.tool_attrs(def_id, &root_attr_path()).next().is_some()
 }
 
 pub fn root_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {

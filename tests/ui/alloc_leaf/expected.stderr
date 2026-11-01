@@ -15,9 +15,9 @@ note: via `std::alloc::alloc`
  12 |     unsafe { alloc(Layout::new::<[u8; 32]>()) }
     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::alloc::__rust_alloc`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:124:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:158:9
     |
-124 |         __rust_alloc(layout.size(), layout.alignment())
+158 |         __rust_alloc(layout.size(), layout.alignment())
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `alloc_leaf` (bin "alloc_leaf") due to 1 previous error

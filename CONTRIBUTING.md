@@ -3,7 +3,7 @@
 ## Toolchain
 
 The checker and its rustc-internals crates (`rustc_middle`, `rustc_interface`,
-...) are pinned to `nightly-2026-08-01` in `rust-toolchain.toml`, and the
+...) are pinned to `nightly-2026-10-31` in `rust-toolchain.toml`, and the
 tool is Linux-only. **Do not bump the pinned nightly casually** — those
 crates have no stability guarantee across nightlies, and the driver's API
 usage is verified against this exact version. See
@@ -12,7 +12,7 @@ rustc's monomorphized instance graph in the first place, and
 [`docs/design.md`](docs/design.md#packages) for the package split.
 
 ```bash
-rustup toolchain install nightly-2026-08-01 --component rustc-dev,rust-src,llvm-tools-preview
+rustup toolchain install nightly-2026-10-31 --component rustc-dev,rust-src,llvm-tools-preview
 ```
 
 `no_alloc_report` and `no_alloc_check` are the exception: they have no

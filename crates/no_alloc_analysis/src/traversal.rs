@@ -184,7 +184,7 @@ fn visit<'tcx>(
                 // An intrinsic has no body of its own; `local` was passed
                 // down unchanged from the body whose MIR contains the call.
                 match codegen_fallback(tcx, local, instance, intrinsic) {
-                    Some(fallback) => rustc_data_structures::stack::ensure_sufficient_stack(|| {
+                    Some(fallback) => ensure_sufficient_stack(|| {
                         let fallback_local = local && tcx.should_codegen_locally(fallback);
                         visit(
                             walk,
@@ -262,7 +262,7 @@ fn visit<'tcx>(
                     let callee_local = local
                         && (matches!(callee.def, InstanceKind::Intrinsic(_))
                             || tcx.should_codegen_locally(callee));
-                    match rustc_data_structures::stack::ensure_sufficient_stack(|| {
+                    match ensure_sufficient_stack(|| {
                         visit(walk, callee, callee_local, span, visited, stack)
                     }) {
                         Some(Finding::Violation(chain)) => {
@@ -515,7 +515,8 @@ fn resolve_shim_body<'tcx>(
         | ShimKind::ClosureOnce { .. }
         | ShimKind::DropGlue(..)
         | ShimKind::Clone(..)
-        | ShimKind::FnPtrAddr(..) => Ok(tcx.instance_mir(instance.def)),
+        | ShimKind::FnPtrAsPtr(..)
+        | ShimKind::FnPtrFromPtr(..) => Ok(tcx.instance_mir(instance.def)),
         // TLS access can lower to a runtime call that has no MIR callee.
         ShimKind::ThreadLocal(_) => Err(RejectReason::ThreadLocalAccess),
         // These unstable synthesized bodies have not been audited.
@@ -719,6 +720,14 @@ fn classify_terminator<'tcx>(
     edges
 }
 
+/// rustc removed `rustc_data_structures::stack::ensure_sufficient_stack`
+/// (stack growth) in favour of a fixed, larger thread stack for the compiler
+/// thread, which this analysis runs on. The single call site wrapper is kept so
+/// growth can be reinstated in one place if deep graphs overflow.
+fn ensure_sufficient_stack<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 /// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls
 /// when an assertion fails, chosen exactly as it chooses it. Lang items are
 /// non-generic, so codegen calls their `Instance::mono`, and so does this.
@@ -727,7 +736,7 @@ fn assert_panic_edge<'tcx>(
     msg: &rustc_middle::mir::AssertMessage<'tcx>,
     span: Span,
 ) -> Edge<'tcx> {
-    use rustc_hir::LangItem;
+    use rustc_attr_ir::lang_items::LangItem;
     use rustc_middle::mir::AssertKind;
     let lang_item = match msg {
         AssertKind::BoundsCheck { .. } => LangItem::PanicBoundsCheck,
@@ -766,8 +775,8 @@ fn is_panic_entry(tcx: TyCtxt<'_>, instance: Instance<'_>) -> bool {
 }
 
 fn defining_path(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> Option<String> {
+    use rustc_attr_ir::lang_items::LangItem;
     use rustc_hir::definitions::DefPathData;
-    use rustc_hir::LangItem;
     let crate_name = tcx.crate_name(def_id.krate);
     // Lang items are unique across a crate graph (a duplicate is a compile
     // error), so the crate that defines one of these *is* that library.

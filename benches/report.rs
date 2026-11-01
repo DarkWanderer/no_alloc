@@ -29,7 +29,7 @@ fn deep_report(depth: usize) -> Report {
                 overflow_checks: false,
                 debug_assertions: false,
                 target_triple: "x86_64-unknown-linux-gnu".into(),
-                rustc_version: "1.99.0-nightly".into(),
+                rustc_version: "1.101.0-nightly".into(),
                 all_crates: false,
                 build_std: false,
             }),

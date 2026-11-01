@@ -4,8 +4,8 @@
 // crate's own lib, so `include!` is what keeps the pin from drifting apart
 // between the two checks as it moves.
 
-const EXPECTED_RELEASE: &str = "release: 1.99.0-nightly";
-const EXPECTED_COMMIT_HASH: &str = "commit-hash: ad3d0bc14";
+const EXPECTED_RELEASE: &str = "release: 1.101.0-nightly";
+const EXPECTED_COMMIT_HASH: &str = "commit-hash: 92b5b8c87";
 const EXPECTED_HOST_SUBSTR: &str = "linux";
 
 /// `version` is the full `rustc -vV` output; `host` is the value of its
@@ -19,7 +19,7 @@ fn is_pinned_toolchain(version: &str, host: &str) -> bool {
 /// Shared wording so a build-time failure (build.rs) and a run-time failure
 /// (`cargo_no_alloc::run`) read identically to whoever hits either one.
 fn toolchain_mismatch_message(version: &str) -> String {
-    format!("cargo-no-alloc requires exactly nightly-2026-08-01 on Linux; found:\n{version}")
+    format!("cargo-no-alloc requires exactly nightly-2026-10-31 on Linux; found:\n{version}")
 }
 
 /// Runs `rustc args...` and returns its stdout. The one copy of the probe

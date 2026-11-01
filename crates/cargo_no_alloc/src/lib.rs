@@ -229,7 +229,7 @@ mod tests {
             // `run` now checks `-vV` (verify_pinned_toolchain) before it
             // ever reaches the `--print host-tuple`/`--print sysroot` calls
             // this script already answered.
-            "#!/bin/sh\nif [ \"$1\" = \"-vV\" ]; then printf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'; exit 0; fi\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-vV\" ]; then printf 'release: 1.101.0-nightly\\ncommit-hash: 92b5b8c87\\nhost: x86_64-unknown-linux-gnu\\n'; exit 0; fi\nif [ \"$1 $2\" = \"--print host-tuple\" ]; then echo x86_64-unknown-linux-gnu; exit 0; fi\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo /fake/sysroot; exit 0; fi\nexit 1\n",
         )?;
         let fake_cargo = directory.join("cargo");
         // The build invocation logs its whole argv and every variable the

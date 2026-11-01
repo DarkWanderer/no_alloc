@@ -1,7 +1,7 @@
 //! An intrinsic is a resolved callee whose body lives in the compiler, not
 //! a call the traversal failed to resolve: the ones named in the
 //! non-allocating intrinsic table are checked, not rejected (ADR 0005).
-//! `f32::sqrt` is `intrinsics::sqrtf32`, and the bit ops below are
+//! `f32::sqrt` is `intrinsics::sqrt::<f32>`, and the bit ops below are
 //! `ctpop`/`ctlz`/`rotate_left` — none of which survive as a MIR body to
 //! walk into.
 

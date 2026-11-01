@@ -43,7 +43,7 @@ use std::sync::{Mutex, OnceLock};
 static CHECKER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// The active toolchain's sysroot (e.g.
-/// `/home/you/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu`),
+/// `/home/you/.rustup/toolchains/nightly-2026-10-31-x86_64-unknown-linux-gnu`),
 /// used to scrub machine-specific rustlib source paths out of diagnostic
 /// snapshots. `rust-toolchain.toml` at the workspace root pins the channel,
 /// so this resolves to the same toolchain `cargo-no-alloc` itself invokes.

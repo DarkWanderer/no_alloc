@@ -20,33 +20,33 @@ note: via `<u8 as std::slice::<impl [T]>::to_vec_in::ConvertVec>::to_vec::<std::
 400 |         return T::to_vec(self, alloc);
     |                ^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::with_capacity_in`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:177:20
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20
     |
-177 |             inner: RawVecInner::with_capacity_in(capacity, alloc, T::LAYOUT),
+187 |             inner: RawVecInner::with_capacity_in(capacity, alloc, T::LAYOUT),
     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::try_allocate_in`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:435:15
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15
     |
-435 |         match Self::try_allocate_in(capacity, AllocInit::Uninitialized, alloc, elem_layout) {
+453 |         match Self::try_allocate_in(capacity, AllocInit::Uninitialized, alloc, elem_layout) {
     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `<std::alloc::Global as std::alloc::Allocator>::allocate_zeroed`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:468:34
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:487:34
     |
-468 |             AllocInit::Zeroed => alloc.allocate_zeroed(layout),
+487 |             AllocInit::Zeroed => alloc.allocate_zeroed(layout),
     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::alloc::Global::alloc_impl_runtime`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:457:9
     |
-418 | /         core::intrinsics::const_eval_select(
-419 | |             (layout, zeroed),
-420 | |             Global::alloc_impl_const,
-421 | |             Global::alloc_impl_runtime,
-422 | |         )
+457 | /         core::intrinsics::const_eval_select(
+458 | |             (layout, zeroed),
+459 | |             Global::alloc_impl_const,
+460 | |             Global::alloc_impl_runtime,
+461 | |         )
     | |_________^
 note: via `alloc::alloc::__rust_alloc_zeroed`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:323:9
     |
-284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+323 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `panic_message_allocates` (bin "panic_message_allocates") due to 1 previous error

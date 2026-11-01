@@ -8,7 +8,7 @@
 //! what this traversal did before) is the wrong reading of ADR 0003: there
 //! is nothing here to be uncertain about, and the rejection is what made
 //! *every* iterator over a slice unverifiable — a panic path compiled under
-//! `panic = "immediate-abort"` bottoms out in `intrinsics::abort`, and the
+//! `panic = "immediate-abort"` bottoms out in `intrinsics::abort_immediate`, and the
 //! optimizer hints around `unlikely` bottom out in `intrinsics::cold_path`.
 //! See ADR 0005.
 //!
@@ -58,7 +58,7 @@
 /// Whether an intrinsic's lowering provably contains no call into Rust code,
 /// and so cannot reach the global allocator. `name` is the intrinsic's name
 /// as the compiler knows it (`rustc_middle::ty::IntrinsicDef::name`), e.g.
-/// `"abort"` — not a path and not a mangled symbol.
+/// `"abort_immediate"` — not a path and not a mangled symbol.
 pub fn intrinsic_cannot_reach_allocator(name: &str) -> bool {
     is_control_or_hint(name)
         || is_layout_query(name)
@@ -68,14 +68,14 @@ pub fn intrinsic_cannot_reach_allocator(name: &str) -> bool {
         || is_atomic(name)
 }
 
-/// Process control and optimizer hints. `abort` terminates the process
+/// Process control and optimizer hints. `abort_immediate` terminates the process
 /// without running any Rust code (it is what a panic lowers to under
 /// `panic = "immediate-abort"`); the rest are pure hints to LLVM that emit
 /// no code of their own.
 fn is_control_or_hint(name: &str) -> bool {
     matches!(
         name,
-        "abort"
+        "abort_immediate"
             | "assume"
             | "black_box"
             | "breakpoint"
@@ -162,6 +162,12 @@ fn is_memory_primitive(name: &str) -> bool {
 
 /// Integer and bit arithmetic — single machine instructions, or the
 /// `llvm.ctlz`/`llvm.ctpop`/... family.
+///
+/// `integer_min` and `integer_max` (behind `Ord::min`/`max` for integers)
+/// are lowered in the same arm as `saturating_add`/`saturating_sub`
+/// (`rustc_codegen_llvm::intrinsic`, rust-lang/rust 92b5b8c87) to a direct
+/// `llvm.umin`/`smin`/`umax`/`smax` call; no Rust code is called. They are
+/// `#[rustc_nounwind]` and their library fallback is a pure comparison.
 fn is_integer_arithmetic(name: &str) -> bool {
     matches!(
         name,
@@ -178,6 +184,8 @@ fn is_integer_arithmetic(name: &str) -> bool {
             | "disjoint_bitor"
             | "exact_div"
             | "float_to_int_unchecked"
+            | "integer_max"
+            | "integer_min"
             | "mul_with_overflow"
             | "rotate_left"
             | "rotate_right"
@@ -200,31 +208,52 @@ fn is_integer_arithmetic(name: &str) -> bool {
     )
 }
 
-/// Floating-point arithmetic. Written as a base name plus the width suffix
-/// the intrinsic set uses (`sqrtf16`/`sqrtf32`/`sqrtf64`/`sqrtf128`) rather
-/// than four spellings of every operation. These lower to a machine
-/// instruction, an `llvm.*` intrinsic, or — for `f16`/`f128` on targets
-/// without hardware support — a `compiler_builtins` soft-float symbol.
+/// Floating-point arithmetic. The math intrinsics are generic over the float
+/// type and carry no width in their name (`sqrt::<f32>`), and the backend
+/// lowers each to the same-named `llvm.*` intrinsic
+/// (`rustc_codegen_llvm::intrinsic`: `llvm.sqrt`, `llvm.pow`, `llvm.fma`, ...);
+/// for `f16`/`f128` on targets without hardware support that lowers to a
+/// `compiler_builtins` soft-float symbol. `copysign`, `minimum`, `maximum`
+/// and the `*_nsz_` pair are still declared once per width
+/// (`copysignf32`, `minimum_number_nsz_f64`), so those are matched as a base
+/// name plus a width suffix.
 ///
-/// Each base is matched against the exact spelling it has in the intrinsic
+/// Each name is matched against the exact spelling it has in the intrinsic
 /// set, including whether an underscore separates it from the width, so
-/// only the audited names match: `sqrtf32` yes, a future `sqrt_f32` no.
-/// Normalizing the two spellings together would quietly admit a name nobody
-/// has looked at, which is the opposite of what an allowlist is for.
+/// only the audited names match: `copysignf32` yes, a future `copysign_f32`
+/// no. Normalizing spellings together would quietly admit a name nobody has
+/// looked at, which is the opposite of what an allowlist is for.
 fn is_float_arithmetic(name: &str) -> bool {
     if matches!(
         name,
-        "fabs"
+        "ceil"
+            | "cos"
+            | "exp"
+            | "exp2"
+            | "fabs"
             | "fadd_algebraic"
             | "fadd_fast"
             | "fdiv_algebraic"
             | "fdiv_fast"
+            | "floor"
+            | "fma"
+            | "fmuladd"
             | "fmul_algebraic"
             | "fmul_fast"
             | "frem_algebraic"
             | "frem_fast"
             | "fsub_algebraic"
             | "fsub_fast"
+            | "log"
+            | "log10"
+            | "log2"
+            | "powf"
+            | "powi"
+            | "round"
+            | "round_ties_even"
+            | "sin"
+            | "sqrt"
+            | "trunc"
     ) {
         return true;
     }
@@ -232,31 +261,14 @@ fn is_float_arithmetic(name: &str) -> bool {
         name.strip_suffix(width).is_some_and(|base| {
             matches!(
                 base,
-                // `sqrtf32`
-                "ceil"
-                    | "copysign"
-                    | "cos"
-                    | "exp"
-                    | "exp2"
-                    | "floor"
-                    | "fma"
-                    | "fmuladd"
-                    | "log"
-                    | "log10"
-                    | "log2"
+                // `copysignf32`
+                "copysign"
                     | "maximum"
                     | "minimum"
-                    | "pow"
-                    | "powi"
-                    | "round"
-                    | "sin"
-                    | "sqrt"
-                    | "trunc"
-                    // `round_ties_even_f32` — the underscore belongs to the
-                    // name, so it is matched rather than trimmed away.
+                    // `minimum_number_nsz_f32` — the underscore belongs to
+                    // the name, so it is matched rather than trimmed away.
                     | "maximum_number_nsz_"
                     | "minimum_number_nsz_"
-                    | "round_ties_even_"
             )
         })
     })
@@ -359,14 +371,19 @@ mod tests {
         }
     }
 
-    /// `abort` is where every panic goes under `panic = "immediate-abort"`,
+    /// `abort_immediate` is where every panic goes under `panic = "immediate-abort"`,
     /// and `cold_path` is what the hint around an overflow check lowers to.
     /// Between them they are the whole reason a slice iterator can be
     /// checked at all (ADR 0005) — a regression here silently takes the
     /// iterator subset back out.
     #[test]
     fn the_intrinsics_that_unblock_iterators_are_in_the_table() {
-        assert!(intrinsic_cannot_reach_allocator("abort"));
+        assert!(intrinsic_cannot_reach_allocator("abort_immediate"));
+        // `Ord::min`/`max` for integers, which iterator adapters use.
+        assert!(intrinsic_cannot_reach_allocator("integer_min"));
+        assert!(intrinsic_cannot_reach_allocator("integer_max"));
+        // The pre-rename spelling no longer names an intrinsic.
+        assert!(!intrinsic_cannot_reach_allocator("abort"));
         assert!(intrinsic_cannot_reach_allocator("cold_path"));
     }
 
@@ -374,36 +391,61 @@ mod tests {
     /// nobody has classified must not fall through to "safe".
     #[test]
     fn unknown_names_are_not_in_the_table() {
-        for name in ["", "definitely_not_an_intrinsic", "alloc", "sqrt"] {
+        for name in ["", "definitely_not_an_intrinsic", "alloc", "sqrtf"] {
             assert!(!intrinsic_cannot_reach_allocator(name), "{name}");
         }
     }
 
     #[test]
     fn float_width_suffixes_are_matched_per_width() {
-        for name in ["sqrtf16", "sqrtf32", "sqrtf64", "sqrtf128", "powif32"] {
+        for name in [
+            "copysignf16",
+            "copysignf32",
+            "minimumf64",
+            "maximumf128",
+            "minimum_number_nsz_f32",
+        ] {
             assert!(intrinsic_cannot_reach_allocator(name), "{name}");
         }
         // The base name is only recognized with a width suffix attached,
         // and only for the four real widths.
-        for name in ["sqrtf80", "round_ties_even", "readf32"] {
+        for name in ["copysign", "minimum", "maximumf80", "readf32"] {
+            assert!(!intrinsic_cannot_reach_allocator(name), "{name}");
+        }
+    }
+
+    /// The math intrinsics are generic and carry no width; the width-suffixed
+    /// spellings the previous nightly used no longer name an intrinsic, so
+    /// they must not match.
+    #[test]
+    fn generic_math_intrinsics_match_without_a_width() {
+        for name in ["sqrt", "powf", "powi", "round_ties_even", "fmuladd", "fabs"] {
+            assert!(intrinsic_cannot_reach_allocator(name), "{name}");
+        }
+        for name in [
+            "sqrtf32",
+            "powf64",
+            "powif32",
+            "round_ties_even_f64",
+            "fmaf128",
+        ] {
             assert!(!intrinsic_cannot_reach_allocator(name), "{name}");
         }
     }
 
     /// The table is an allowlist, so a name that merely *resembles* an
     /// audited one must not match. A future toolchain that spells an
-    /// intrinsic `sqrt_f32` is introducing a lowering nobody here has
+    /// intrinsic `copysign_f32` is introducing a lowering nobody here has
     /// looked at, and it should reject until someone does.
     #[test]
     fn near_miss_spellings_do_not_match() {
         for name in [
-            "sqrt_f32",
-            "sqrt__f32",
-            "round_ties_evenf64",
-            "round_ties_even__f64",
+            "copysign_f32",
+            "copysign__f32",
             "minimum_number_nszf32",
-            "_sqrtf32",
+            "maximum_number_nsz__f64",
+            "_copysignf32",
+            "sqrt_f32",
         ] {
             assert!(!intrinsic_cannot_reach_allocator(name), "{name}");
         }
@@ -411,7 +453,7 @@ mod tests {
 
     #[test]
     fn multi_word_base_names_keep_their_underscores() {
-        assert!(intrinsic_cannot_reach_allocator("round_ties_even_f64"));
+        assert!(intrinsic_cannot_reach_allocator("round_ties_even"));
         assert!(intrinsic_cannot_reach_allocator("maximum_number_nsz_f32"));
         assert!(intrinsic_cannot_reach_allocator("minimum_number_nsz_f128"));
     }
