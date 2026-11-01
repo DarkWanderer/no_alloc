@@ -2,19 +2,15 @@
 
 [![CI](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cargo-no-alloc.svg)](https://crates.io/crates/cargo-no-alloc)
-[![docs.rs](https://docs.rs/no_alloc_report/badge.svg)](https://docs.rs/no_alloc_report)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 `no_alloc` statically checks that selected Rust function instances cannot
 reach the global allocator. It is intentionally conservative: unresolved
 calls are rejected instead of assumed safe.
 
-The checker is currently Linux-only and tied to `nightly-2026-08-01`. One
-consequence: `no_alloc_analysis` requires `#![feature(rustc_private)]` and
-cannot build on docs.rs, so the docs.rs badge above points at
-`no_alloc_report` — the stable-compatible report crate — instead.
-
 ## Install and use
+
+The checker runs on Linux only and needs the `nightly-2026-08-01` toolchain.
 
 Install the marker macro first, then the Cargo command:
 
@@ -67,7 +63,7 @@ the backend synthesizes are assumed to be the platform's. See
 - [Guarantee and limitations](docs/guarantees.md)
 - [Iterators](docs/iterators.md): which iterator patterns pass, measured
 - [Design](docs/design.md)
-- [Development](docs/development.md)
+- [Contributing](CONTRIBUTING.md)
 - [Releasing](docs/releasing.md)
 - [Architecture decision records](adr/)
 
