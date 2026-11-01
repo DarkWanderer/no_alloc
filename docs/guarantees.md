@@ -59,10 +59,12 @@ nounwind panic-handler call) that the traversal never walks. `Unreachable`
 codegens to a bare LLVM `unreachable` and contains no code at all. These are
 out of scope in both modes ([ADR 0003](../adr/0003-reject-unresolved-edges.md)).
 
-Two panic-related lowerings still reject in the default mode, because the
-panic call they emit appears in no MIR body for the traversal to recognise:
-the validity assertions (`mem::zeroed::<&T>()` and similar, classified per
-instantiation) and a field projection into an extern-type tail.
+The carve-out covers a panic on one *branch* of an executable path, not a
+construct whose *only* lowering is a panic. A failing validity assertion
+(`mem::zeroed::<&T>()`, undefined behaviour on every call that reaches it)
+and a field projection into an extern-type tail therefore reject in every
+mode, by design — see
+[ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md#unconditional-panics-are-not-carved-out-amended-2026-11-01).
 
 **`--strict` checks panic paths too.** It compiles the crate and the standard
 library with `-Cpanic=immediate-abort`, where every panic — including the
@@ -124,8 +126,9 @@ is a different case — see [`--all-crates`](usage.md#instrumentation-scope). `a
 - A callee with explicit linkage (`#[linkage = "weak"]` and similar) is
   rejected: the linker may bind the symbol to a different definition than the
   MIR checked. A field projection into a type with an extern-type tail is
-  rejected too, because codegen emits a panic call for it that no MIR edge
-  names ([ADR 0003](../adr/0003-reject-unresolved-edges.md)).
+  rejected too, in every mode: codegen lowers it to an unconditional panic
+  call that no MIR edge names ([ADR 0003](../adr/0003-reject-unresolved-edges.md),
+  [ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md#unconditional-panics-are-not-carved-out-amended-2026-11-01)).
 
 See [`docs/design.md`](design.md) and the [`adr/`](../adr) directory for the
 design rationale and operational details.

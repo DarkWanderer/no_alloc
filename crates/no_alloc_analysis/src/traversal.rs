@@ -383,6 +383,9 @@ fn swap_lowered_in_place<'tcx>(
 /// rejected, because the panic it compiles to is exactly the edge the
 /// traversal cannot follow. A type whose layout cannot be computed is
 /// rejected too — no answer is not a "yes".
+///
+/// Rejected in the default mode too: the panic is unconditional and guards
+/// UB, so ADR 0008's carve-out would certify it only vacuously.
 fn classify_validity_assertion<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -415,6 +418,9 @@ fn classify_validity_assertion<'tcx>(
 /// mean depending on layout details, so any field projection whose type has
 /// an extern-type tail is rejected, whatever its offset (ADR 0003: reject,
 /// don't assume).
+///
+/// Rejected in the default mode too: the panic is the projection's only
+/// lowering, so there is no non-panicking path for ADR 0008 to keep.
 fn extern_tail_projection<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,

@@ -6,9 +6,9 @@
 //! this traversal can no longer see it, and under `panic = "abort"` it
 //! reaches a panic handler that allocates.
 //!
-//! This still rejects in the default mode (ADR 0008): the panic call is
-//! synthesized after MIR, so it is not a call to a panic entry point the
-//! traversal could recognise, and is treated like any other unresolved edge.
+//! It rejects in every mode by design (ADR 0008): the panic is unconditional
+//! and guards UB on every call that reaches it, not a branch of an executable
+//! path, so a `Pass` would certify nothing. Not because the panic allocates.
 //!
 //! The passing half is `strict_iterator::search`, under `--strict`.
 
