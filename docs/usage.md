@@ -2,23 +2,8 @@
 
 ## Marker attribute
 
-Mark functions and concrete methods with the attribute from `no_alloc_check`:
-
-```rust
-#[no_alloc_check::no_alloc]
-fn process(sample: f32) -> f32 {
-    sample * 0.5
-}
-```
-
-Add this lint configuration to the crate using the attribute:
-
-```toml
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }
-```
-
-The macro rejects async functions, trait methods without bodies, and
+Setup is in the [README](../README.md#install-and-use). The macro takes no
+arguments, and rejects async functions, trait methods without bodies, and
 non-function items because their executable body cannot yet be selected
 soundly.
 
@@ -80,21 +65,21 @@ immediate-abort without `--build-std`, non-UTF-8 flags) persist a failing
 
 ## Report
 
-The final deterministic report is
-written to `target/no-alloc/report.json`. Its `warnings` list (omitted when
-empty) holds conditions that leave the exit code at 0 but that a reader of the
-file must not mistake for a verified pass; today that is a run that checked
-zero roots, including one where every root was `not_instantiated`. Each checked root carries a versioned
-`environment` block with its typed panic strategy, optimization and MIR
-optimization levels, target triple, rustc version, the
-`--all-crates`/`--build-std` settings, and `panic_paths` — `"out_of_scope"`
-for the default mode, `"checked"` under `--strict`
+The final deterministic report is written to `target/no-alloc/report.json`.
+Its `warnings` list (omitted when empty) holds conditions that leave the exit
+code at 0 but that a reader of the file must not mistake for a verified pass:
+a run that checked zero roots, including one where every root was
+`not_instantiated`.
+
+Each checked root carries a versioned `environment` block with its typed
+panic strategy, optimization and MIR optimization levels, target triple,
+rustc version, the `--all-crates`/`--build-std` settings, and `panic_paths` —
+`"out_of_scope"` for the default mode, `"checked"` under `--strict`
 ([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)). A `Pass`
-means something different in each, so read the two together. These values matter to what was proven,
-and recording them per root preserves the real configuration when one Cargo
-build contains both host and target artifacts. The report-level
-`panic_strategy` remains for compatibility and is omitted when those artifacts
-disagree.
+means something different in each, so read the two together. These values
+matter to what was proven, and recording them per root preserves the real
+configuration when one Cargo build contains both host and target artifacts.
+The report-level `panic_strategy` is omitted when those artifacts disagree.
 
 ## Logging
 
@@ -128,4 +113,4 @@ rebuild makes each run take minutes.
 
 See [`examples/basic`](../examples/basic) for a runnable example, and
 [`examples/iterators`](../examples/iterators) for the 35 iterator patterns
-behind `docs/iterators.md`.
+behind [`iterators.md`](iterators.md).

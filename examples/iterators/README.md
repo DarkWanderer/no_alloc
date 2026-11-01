@@ -22,6 +22,6 @@ the standard library with `-Cpanic=immediate-abort`, so it takes a couple of
 minutes. Measured, it gives the same 33 / 1 / 1
 ([ADR 0006](../../adr/0006-immediate-abort-checking-mode.md)).
 
-Note that this crate's manifest is entirely ordinary — no
-`cargo-features`, no `[profile.dev] panic`. `--strict` supplies the panic
-strategy for its own build, so the crate still builds on stable.
+This crate's manifest is ordinary — no `cargo-features`, no
+`[profile.dev] panic`: `--strict` supplies the panic strategy for its own
+build.

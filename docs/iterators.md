@@ -2,15 +2,11 @@
 
 Iterators are the case where "does this reach the allocator?" and "can this
 tool prove it?" come apart the furthest. `slice.iter().map(..).sum()`
-allocates nothing at runtime, and until the changes in ADRs
-[0005](../adr/0005-intrinsic-leaf-classification.md),
-[0006](../adr/0006-immediate-abort-checking-mode.md),
-[0007](../adr/0007-shim-and-fn-item-resolution.md) and
-[0008](../adr/0008-panic-paths-out-of-scope-by-default.md) this checker could
-not verify a single iterator pattern in its default configuration.
+allocates nothing at runtime, but the standard library code behind it
+reaches the panic machinery at almost every step.
 
-This document is the measured answer: what passes now, what does not, and
-why. Everything in the tables comes from
+This document is the measured answer: what passes, what does not, and why.
+Everything in the tables comes from
 [`examples/iterators`](../examples/iterators), which is 35 `#[no_alloc]`
 roots you can re-run yourself, measured on `nightly-2026-08-01`.
 
@@ -37,9 +33,7 @@ lowers to a bare `abort()`, and the walk goes all the way down to it.
 | `--strict` | 33 |
 
 The other two are a real allocation and a real function pointer, both
-described below, and they are the same two in every configuration. Before
-ADR 0008 the first two rows were 0: every root rejected inside the panic
-machinery, at a function the precompiled sysroot ships no MIR for.
+described below, and they are the same two in every configuration.
 
 The rows mean different things. A default-mode `Pass` says no allocator is
 reachable except through a panic; a `--strict` `Pass` also says the panic
@@ -68,7 +62,7 @@ entry point (default) or `abort` (`--strict`).
 One root rejects, and it earns it: `slice.sort_unstable()`.
 
 ```
-sorted
+sort_in_place
   core::slice::<impl [T]>::sort_unstable
     core::slice::sort::unstable::sort
       core::slice::sort::unstable::ipnsort
@@ -82,14 +76,6 @@ there is no single body for the traversal to walk to, and
 [ADR 0003](../adr/0003-reject-unresolved-edges.md) says reject rather than
 assume. Neither mode changes that, and nothing should: this is the tool
 reporting a real limit on what it can see, not a modelling gap.
-
-Comparison-driven adapters used to be in this section for a much worse
-reason. `max`, `min_by_key`, `flat_map` and `.scan(..).last()` reach their
-callbacks as function items behind a `FnMut::call_mut` shim, and the
-traversal rejected the shim without looking inside it —
-[ADR 0007](../adr/0007-shim-and-fn-item-resolution.md) is that fix. If you
-are reading an older report, that is what those `FnMut::call_mut` chains
-were.
 
 ## The control case
 

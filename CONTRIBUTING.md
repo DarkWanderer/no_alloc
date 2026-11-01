@@ -78,6 +78,10 @@ the monomorphized graph does not populate without reaching codegen. Every
 run also runs `cargo clean` first (see `docs/design.md`), so testing it
 manually against a fixture is always a full rebuild, not an incremental one.
 
+## Releasing
+
+See [`docs/releasing.md`](docs/releasing.md).
+
 ## License
 
 By contributing, you agree that your contributions are licensed under either
