@@ -2,7 +2,8 @@
 
 ## Marker attribute
 
-The macro rejects async functions, trait methods without bodies, and
+Setup is in the [README](../README.md#install-and-use). The macro takes no
+arguments, and rejects async functions, trait methods without bodies, and
 non-function items because their executable body cannot yet be selected
 soundly.
 
@@ -64,22 +65,27 @@ immediate-abort without `--build-std`, non-UTF-8 flags) persist a failing
 
 ## Report
 
-The existing `NO_ALLOC_ROOTS`, `NO_ALLOC_WARN_ONLY`, and `NO_ALLOC_LOG`
-environment interfaces remain supported. The final deterministic report is
-written to `target/no-alloc/report.json`. Its `warnings` list (omitted when
-empty) holds conditions that leave the exit code at 0 but that a reader of the
-file must not mistake for a verified pass; today that is a run that checked
-zero roots, including one where every root was `not_instantiated`. Each checked root carries a versioned
-`environment` block with its typed panic strategy, optimization and MIR
-optimization levels, target triple, rustc version, the
-`--all-crates`/`--build-std` settings, and `panic_paths` — `"out_of_scope"`
-for the default mode, `"checked"` under `--strict`
+The final deterministic report is written to `target/no-alloc/report.json`.
+Its `warnings` list (omitted when empty) holds conditions that leave the exit
+code at 0 but that a reader of the file must not mistake for a verified pass:
+a run that checked zero roots, including one where every root was
+`not_instantiated`.
+
+Each checked root carries a versioned `environment` block with its typed
+panic strategy, optimization and MIR optimization levels, target triple,
+rustc version, the `--all-crates`/`--build-std` settings, and `panic_paths` —
+`"out_of_scope"` for the default mode, `"checked"` under `--strict`
 ([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)). A `Pass`
-means something different in each, so read the two together. These values matter to what was proven,
-and recording them per root preserves the real configuration when one Cargo
-build contains both host and target artifacts. The report-level
-`panic_strategy` remains for compatibility and is omitted when those artifacts
-disagree.
+means something different in each, so read the two together. These values
+matter to what was proven, and recording them per root preserves the real
+configuration when one Cargo build contains both host and target artifacts.
+The report-level `panic_strategy` is omitted when those artifacts disagree.
+
+## Logging
+
+`NO_ALLOC_LOG` is a `tracing` env-filter (for example `NO_ALLOC_LOG=debug`).
+It applies to both `cargo-no-alloc` and the driver, and logging is off by
+default. Output goes to stderr.
 
 ## Clean rebuild on every run
 
@@ -87,7 +93,7 @@ Every invocation runs `cargo clean` on the checker's target first, so
 **every `cargo no-alloc` run is a from-scratch rebuild**, never an
 incremental one. This is deliberate — it guarantees that a checker
 configuration change can never be hidden by Cargo's build cache (see
-[`docs/design.md`](design.md)) — but it means every run pays full
+[`design.md`](design.md)) — but it means every run pays full
 compile time, not just the cost of what changed.
 
 ## Strict mode
@@ -101,11 +107,10 @@ not build under an abort strategy), so every panic lowers to a bare `abort()`
 the traversal walks to — see
 [ADR 0006](../adr/0006-immediate-abort-checking-mode.md) and
 [ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md). The sysroot
-rebuild makes each run take minutes. `--immediate-abort`, the previous name
-for this mode, has been removed and is an unknown option.
+rebuild makes each run take minutes.
 
 ## Examples
 
 See [`examples/basic`](../examples/basic) for a runnable example, and
 [`examples/iterators`](../examples/iterators) for the 35 iterator patterns
-behind `docs/iterators.md`.
+behind [`iterators.md`](iterators.md).

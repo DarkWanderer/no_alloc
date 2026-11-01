@@ -1,7 +1,5 @@
-//! Stable-only report/verdict types, root-spec parsing, the non-allocating
-//! intrinsic table, and the panic entry-point table. Split out from
-//! `no_alloc_analysis` so this logic is unit-testable on stable without a
-//! `TyCtxt` in scope.
+//! Report and verdict types, root-spec parsing, and the audited
+//! non-allocating intrinsic and panic entry-point tables for `cargo-no-alloc`.
 
 mod intrinsic_table;
 mod panic_table;

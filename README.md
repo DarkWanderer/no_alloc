@@ -2,19 +2,15 @@
 
 [![CI](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkWanderer/no_alloc/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cargo-no-alloc.svg)](https://crates.io/crates/cargo-no-alloc)
-[![docs.rs](https://docs.rs/no_alloc_report/badge.svg)](https://docs.rs/no_alloc_report)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 `no_alloc` statically checks that selected Rust function instances cannot
 reach the global allocator. It is intentionally conservative: unresolved
 calls are rejected instead of assumed safe.
 
-The checker is currently Linux-only and tied to `nightly-2026-08-01`. One
-consequence: `no_alloc_analysis` requires `#![feature(rustc_private)]` and
-cannot build on docs.rs, so the docs.rs badge above points at
-`no_alloc_report` — the stable-compatible report crate — instead.
-
 ## Install and use
+
+The checker runs on Linux only and needs the `nightly-2026-08-01` toolchain.
 
 Install the marker macro first, then the Cargo command:
 
@@ -33,7 +29,7 @@ fn process(sample: f32) -> f32 {
 }
 ```
 
-Add this lint configuration to consumers:
+Add this lint configuration to the crate using the attribute:
 
 ```toml
 [lints.rust]
@@ -51,13 +47,13 @@ configuration reference.
 
 ## Guarantee and limitations
 
-The checker is conservative: unresolved call edges (function pointers,
-virtual dispatch, foreign calls without MIR) are rejected, never assumed
-safe. By default the guarantee is "no allocation on any non-panicking path":
-the walk stops at a standard-library panic entry point (`unwrap_failed`,
-`panic_fmt`, ...) and at bounds and overflow checks. Pass `--strict` to check
-panic paths too; it rebuilds the standard library so panics lower to a bare
-abort, which takes minutes. The boundary is MIR, not machine code, so symbols
+Unresolved call edges (function pointers, virtual dispatch, foreign calls
+without MIR) are rejected, never assumed safe. By default the guarantee is
+"no allocation on any non-panicking path": the walk stops at a
+standard-library panic entry point (`unwrap_failed`, `panic_fmt`, ...) and at
+bounds and overflow checks. Pass `--strict` to check panic paths too; it
+rebuilds the standard library so panics lower to a bare abort, which takes
+minutes. The boundary is MIR, not machine code, so symbols
 the backend synthesizes are assumed to be the platform's. See
 [`docs/guarantees.md`](docs/guarantees.md) for the full statement.
 
@@ -67,8 +63,7 @@ the backend synthesizes are assumed to be the platform's. See
 - [Guarantee and limitations](docs/guarantees.md)
 - [Iterators](docs/iterators.md): which iterator patterns pass, measured
 - [Design](docs/design.md)
-- [Development](docs/development.md)
-- [Releasing](docs/releasing.md)
+- [Contributing](CONTRIBUTING.md)
 - [Architecture decision records](adr/)
 
 ## License

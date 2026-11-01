@@ -110,7 +110,7 @@ jobs:
 
       # Dependency order: no_alloc_report/no_alloc_check first (no path
       # deps), then no_alloc_analysis (depends on no_alloc_report), then
-      # cargo-no-alloc (depends on both). See adr/0001 and AGENTS.md.
+      # cargo-no-alloc (depends on both). See docs/releasing.md.
       - name: Publish crates in dependency order
         if: ${{ !inputs.dry_run }}
         env:

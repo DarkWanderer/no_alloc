@@ -1,51 +1,29 @@
-# no_alloc — working notes for coding agents
+# no_alloc — notes for coding agents
 
-- This tool makes a soundness claim (no allocator reachable from a marked
-  root). Any change to `crates/no_alloc_analysis` must preserve "reject,
-  don't assume" for unresolved call edges — see
-  [ADR 0003](adr/0003-reject-unresolved-edges.md). Do not special-case an
-  edge kind into "assume safe" to make a test pass.
-- The non-allocating intrinsic table
-  (`crates/no_alloc_report/src/intrinsic_table.rs`) is an allowlist and a
-  soundness surface — see [ADR 0005](adr/0005-intrinsic-leaf-classification.md).
-  Adding a name asserts that the compiler's lowering of that intrinsic
-  cannot call into Rust code; an intrinsic that runs a caller-supplied
-  function (`catch_unwind`, `const_eval_select`, the contract checks) must
-  never be added, and neither must the validity assertions
-  (`assert_inhabited` and friends), whose codegen emits a panic call for a
-  failing instantiation — those are classified per instantiation in
-  `traversal.rs` instead, and reject in every mode (ADR 0008, "Unconditional
-  panics are not carved out"). Unknown names reject, which is the correct default
-  — do not "complete a family" to make something pass.
-- The panic entry-point table (`crates/no_alloc_report/src/panic_table.rs`)
-  is an allowlist and a soundness surface like the intrinsic table — see
-  [ADR 0008](adr/0008-panic-paths-out-of-scope-by-default.md). Adding a path
-  asserts that *every* path through that sysroot function ends in a panic;
-  diverging is not enough (`process::abort`, `process::exit`,
-  `handle_alloc_error` must never be added). Keys are crate-qualified
-  defining paths, not `def_path_str` output. The table only applies in the
-  default mode; `--strict` walks panic paths.
-- `docs/iterators.md` records which iterator patterns pass in the default
-  mode and under `--strict`, measured from `examples/iterators`. If you
-  change the traversal, re-run that example in both modes and update the
-  numbers in the doc, its README, and `examples/iterators/src/main.rs` —
-  they are stated as measured facts, not estimates.
-- Analysis runs on the **monomorphized instance graph**
-  (`collect_and_partition_mono_items`), not on function definitions. See
-  [ADR 0001](adr/0001-mono-site-analysis.md). A verdict is per-instantiation;
-  do not memoize or report by `DefId` alone.
-- The pinned nightly is `nightly-2026-08-01`. Do not bump it casually — the
-  rustc-internals crates (`rustc_middle`, `rustc_interface`, ...) have no
-  stability guarantee across nightlies, and the driver's API usage is
-  verified against this exact version.
-- `no_alloc_report` must stay buildable and testable on stable — it has no
-  `rustc_private` dependency. Keep rustc-internals types out of it; convert
-  at the boundary in `no_alloc_analysis`.
-- Regression tests live in `tests/ui/<case>/`. Each case is a full toy crate
-  plus `expected.json` (assert on this) and `expected.stderr` (snapshot,
-  `NO_ALLOC_BLESS=1` to update), and optionally a `checker-args` file for a
-  case that needs non-default checker flags. Adding an edge-table rule or a
-  leaf-set change should come with a new case, not just an assertion on an
-  existing one.
-- `cargo no-alloc` invokes `cargo build`/`cargo test`, never `cargo check` —
-  the mono graph does not populate without reaching codegen.
+Rules that bind every contributor live in [CONTRIBUTING.md](CONTRIBUTING.md);
+follow them. In particular:
+
+- Soundness ("reject, don't assume"; per-instantiation verdicts; the
+  intrinsic and panic tables are allowlists — never add a name to make
+  something pass): [CONTRIBUTING.md#soundness](CONTRIBUTING.md#soundness),
+  ADRs [0001](adr/0001-mono-site-analysis.md),
+  [0003](adr/0003-reject-unresolved-edges.md),
+  [0005](adr/0005-intrinsic-leaf-classification.md),
+  [0008](adr/0008-panic-paths-out-of-scope-by-default.md).
+- Pinned nightly and the stable-only crates:
+  [CONTRIBUTING.md#toolchain](CONTRIBUTING.md#toolchain).
+- Verification commands: [CONTRIBUTING.md#build-and-test](CONTRIBUTING.md#build-and-test).
+- `tests/ui/` layout, blessing, `checker-args`/`checker-env`, new case per
+  rule change: [CONTRIBUTING.md#regression-tests](CONTRIBUTING.md#regression-tests).
+- Measured iterator numbers to re-run after traversal changes:
+  [CONTRIBUTING.md#iterator-measurements](CONTRIBUTING.md#iterator-measurements).
+- Why `cargo no-alloc` never runs `cargo check`:
+  [CONTRIBUTING.md#manual-verification](CONTRIBUTING.md#manual-verification).
+- Architecture: [docs/design.md](docs/design.md); scope of the guarantee:
+  [docs/guarantees.md](docs/guarantees.md).
+
+## Agent-only rules
+
+- Never run `cargo publish`, `cargo release`, the release workflow, or any
+  other publishing step unless the user explicitly asks for it. Publishing is
+  permanent; the procedure is in [docs/releasing.md](docs/releasing.md).

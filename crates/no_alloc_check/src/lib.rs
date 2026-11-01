@@ -1,12 +1,31 @@
-//! Proc-macro attribute expanding to a cfg-gated tool-attribute marker.
+//! The `#[no_alloc]` marker attribute for
+//! [`cargo-no-alloc`](https://crates.io/crates/cargo-no-alloc).
 //!
-//! On a normal build `cfg_attr` is evaluated in the *caller's* crate and the
-//! `no_alloc_check` cfg is unset, so the whole attribute evaluates away:
-//! no nightly features, no marker residue, no codegen impact. Under the
-//! checker driver (`--cfg no_alloc_check`) it expands to
-//! `#[no_alloc_tool::root]`, legible only because the driver also passes
-//! `-Zcrate-attr=feature(register_tool)` and
-//! `-Zcrate-attr=register_tool(no_alloc_tool)`.
+//! `#[no_alloc]` marks a function or concrete method for `cargo no-alloc` to
+//! check: the checker verifies that the marked instance cannot reach the
+//! global allocator. On a normal build the attribute evaluates away: it needs
+//! no nightly features and has no codegen impact.
+//!
+//! ```rust,ignore
+//! #[no_alloc_check::no_alloc]
+//! fn process(sample: f32) -> f32 {
+//!     sample * 0.5
+//! }
+//! ```
+//!
+//! Add this lint configuration to the crate using the attribute:
+//!
+//! ```toml
+//! [lints.rust]
+//! unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }
+//! ```
+//!
+//! Then run `cargo no-alloc -- build`. The attribute takes no arguments and
+//! rejects async functions, trait methods without a body, and non-function
+//! items. See the [README](https://github.com/DarkWanderer/no_alloc#readme)
+//! for installation and
+//! [usage](https://github.com/DarkWanderer/no_alloc/blob/main/docs/usage.md)
+//! for the full command line.
 
 use proc_macro::TokenStream;
 use quote::quote;

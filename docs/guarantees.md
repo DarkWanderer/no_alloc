@@ -82,7 +82,7 @@ binary.
 Measured over the 35 iterator patterns in `examples/iterators`, the default
 mode passes 33 under both `panic = "unwind"` and `panic = "abort"`, and
 `--strict` passes the same 33; the other two are a real allocation and a real
-function pointer — see [`docs/iterators.md`](iterators.md).
+function pointer — see [`iterators.md`](iterators.md).
 
 **The boundary is MIR, not the machine code.** The analysis follows the
 calls the compiler puts in MIR; it does not see the ones the backend
@@ -130,5 +130,5 @@ is a different case — see [`--all-crates`](usage.md#instrumentation-scope). `a
   call that no MIR edge names ([ADR 0003](../adr/0003-reject-unresolved-edges.md),
   [ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md#unconditional-panics-are-not-carved-out-amended-2026-11-01)).
 
-See [`docs/design.md`](design.md) and the [`adr/`](../adr) directory for the
+See [`design.md`](design.md) and the [`adr/`](../adr) directory for the
 design rationale and operational details.
