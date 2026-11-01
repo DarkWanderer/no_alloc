@@ -3,7 +3,7 @@
 
 use crate::cargo_args::split_at_separator;
 use anyhow::{bail, ensure, Context, Result};
-use no_alloc_report::parse_root_spec;
+use no_alloc_report::{parse_root_spec, PanicPaths};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
@@ -15,20 +15,20 @@ pub(crate) const HELP_TEXT: &str = "\
 cargo no-alloc [OPTIONS] -- [build|test] [CARGO_ARGS...]
 
 Statically checks that #[no_alloc]-marked function instances cannot reach
-the global allocator, then runs the underlying Cargo command (`build` is
-used when [build|test] is omitted; `check` is rejected because it never
-produces the monomorphized instance graph the analysis runs on).
+the global allocator on any non-panicking path, then runs the underlying
+Cargo command (`build` is used when [build|test] is omitted; `check` is
+rejected because it never produces the monomorphized instance graph the
+analysis runs on).
 
 Options:
       --all-crates   Instrument every crate in the build (RUSTC_WRAPPER),
                      not just workspace members (RUSTC_WORKSPACE_WRAPPER)
       --build-std    Pass -Zbuild-std to Cargo
-      --immediate-abort
-                     Compile everything, std included, with
-                     -Cpanic=immediate-abort so panic paths lower to a bare
-                     abort() and can be checked instead of rejected.
+      --strict       Also check panic paths: compile everything, std
+                     included, with -Cpanic=immediate-abort so a panic
+                     lowers to a bare abort() the analysis can walk to.
                      Implies --build-std; cannot be combined with `test`.
-                     See docs/iterators.md
+                     See docs/guarantees.md
       --warn-only    Report findings on stderr without failing the build
       --root PATH    Additionally check an unannotated function by its
                      canonical path (repeatable; a value may also be a
@@ -37,7 +37,7 @@ Options:
   -V, --version      Print version information and exit";
 
 /// Cargo target selections that always pull in a libtest harness, which
-/// cannot be built under `--immediate-abort` (see the `-- test` rejection).
+/// cannot be built under `--strict` (see the `-- test` rejection).
 ///
 /// Only these two: both include the unit-test targets of the lib and bins,
 /// which use libtest whatever the manifest says. `--test`/`--bench` name one
@@ -78,14 +78,16 @@ impl CargoCommand {
     }
 }
 
-/// Which standard library the checked build links against. The third state
-/// implies the second, which is why this is one enum and not two flags:
-/// "immediate-abort without build-std" is not a representable invocation.
+/// Which standard library the checked build links against, and whether
+/// panic paths are checked. `Strict` implies a rebuilt sysroot and checked
+/// panic paths together, which is why this is one enum and not three flags:
+/// "strict without build-std" and "panic paths checked against a sysroot
+/// whose panics were not rebuilt to abort" are not representable invocations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StdMode {
     Precompiled,
     BuildStd,
-    ImmediateAbort,
+    Strict,
 }
 
 impl StdMode {
@@ -98,8 +100,18 @@ impl StdMode {
         self != Self::Precompiled
     }
 
-    pub(crate) fn selects_immediate_abort(self) -> bool {
-        self == Self::ImmediateAbort
+    /// Whether this run injects `-Cpanic=immediate-abort` (and so cannot
+    /// build a libtest harness).
+    pub(crate) fn is_strict(self) -> bool {
+        self == Self::Strict
+    }
+
+    /// The analysis mode the driver is told to run in (ADR 0008).
+    pub(crate) fn panic_paths(self) -> PanicPaths {
+        match self {
+            Self::Precompiled | Self::BuildStd => PanicPaths::OutOfScope,
+            Self::Strict => PanicPaths::Checked,
+        }
     }
 }
 
@@ -241,7 +253,7 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parse
                 index += 1;
                 break;
             }
-            // Never downgrades `--immediate-abort`, whichever order they come in.
+            // Never downgrades `--strict`, whichever order they come in.
             "--build-std" => {
                 if std_mode == StdMode::Precompiled {
                     std_mode = StdMode::BuildStd;
@@ -249,7 +261,7 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parse
             }
             // Implies --build-std: the panic strategy has to match all the
             // way down, and the precompiled sysroot was not built with it.
-            "--immediate-abort" => std_mode = StdMode::ImmediateAbort,
+            "--strict" => std_mode = StdMode::Strict,
             "--all-crates" => scope = Scope::AllCrates,
             "--warn-only" => warn_only = true,
             // A cargo subcommand is expected to answer these regardless of
@@ -288,10 +300,10 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parse
     // `-Zpanic-abort-tests` does not help: it keys off the profile's panic
     // setting, and this strategy arrives through RUSTFLAGS instead.
     ensure!(
-        !(std_mode.selects_immediate_abort() && command == CargoCommand::Test),
-        "`--immediate-abort` cannot be combined with `-- test`: rustc refuses to build a \
-         test harness under an abort panic strategy. Use `-- build`, which is the supported \
-         mode for meaningful results anyway (see README, \"Guarantee and limitations\")"
+        !(std_mode.is_strict() && command == CargoCommand::Test),
+        "`--strict` cannot be combined with `-- test`: rustc refuses to build a test harness \
+         under the abort panic strategy `--strict` compiles with. Use `--strict -- build`, \
+         or `-- test` without `--strict` (see docs/guarantees.md)"
     );
     for arg in split_at_separator(&cargo).0 {
         ensure!(
@@ -306,10 +318,10 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Parse
         // which rustc will not build under an abort panic strategy.
         let flag = arg.split('=').next().unwrap_or(arg);
         ensure!(
-            !std_mode.selects_immediate_abort() || !TEST_HARNESS_SELECTORS.contains(&flag),
-            "`--immediate-abort` cannot build test-harness targets (`{flag}`): rustc refuses \
-             to build a test harness under an abort panic strategy. Drop the target selection, \
-             or check those targets without `--immediate-abort`"
+            !std_mode.is_strict() || !TEST_HARNESS_SELECTORS.contains(&flag),
+            "`--strict` cannot build test-harness targets (`{flag}`): rustc refuses to build a \
+             test harness under the abort panic strategy `--strict` compiles with. Drop the \
+             target selection, or check those targets without `--strict`"
         );
     }
     Ok(ParsedArgs::Run(Invocation {
@@ -470,51 +482,62 @@ mod tests {
     }
 
     #[test]
-    fn immediate_abort_implies_build_std() -> Result<()> {
-        let inv = parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"])?;
-        assert!(inv.std_mode.selects_immediate_abort());
+    fn strict_implies_build_std_and_checked_panic_paths() -> Result<()> {
+        let inv = parse(&["cargo-no-alloc", "--strict", "--", "build"])?;
+        assert!(inv.std_mode.is_strict());
+        assert_eq!(inv.std_mode.panic_paths(), PanicPaths::Checked);
         // Rebuilding the sysroot is not optional here: the precompiled one
         // was built with a different panic strategy, and mixing them is
         // exactly what this flag exists to avoid.
         assert!(inv.std_mode.rebuilds_std());
-        // --build-std on its own must not turn the panic strategy on.
+        // --build-std on its own changes neither the strategy nor the scope.
         let inv = parse(&["cargo-no-alloc", "--build-std", "--", "build"])?;
         assert!(inv.std_mode.rebuilds_std());
-        assert!(!inv.std_mode.selects_immediate_abort());
+        assert!(!inv.std_mode.is_strict());
+        assert_eq!(inv.std_mode.panic_paths(), PanicPaths::OutOfScope);
+        // The default leaves panic paths out of scope (ADR 0008).
+        let inv = parse(&["cargo-no-alloc", "--", "build"])?;
+        assert_eq!(inv.std_mode.panic_paths(), PanicPaths::OutOfScope);
         // Flag order must not matter: `--build-std` never downgrades.
-        for order in [
-            ["--immediate-abort", "--build-std"],
-            ["--build-std", "--immediate-abort"],
-        ] {
+        for order in [["--strict", "--build-std"], ["--build-std", "--strict"]] {
             let inv = parse(&["cargo-no-alloc", order[0], order[1], "--", "build"])?;
-            assert_eq!(inv.std_mode, StdMode::ImmediateAbort, "{order:?}");
+            assert_eq!(inv.std_mode, StdMode::Strict, "{order:?}");
         }
         Ok(())
     }
 
+    /// `--immediate-abort` was removed, not aliased, so the old spelling
+    /// must fail loudly rather than run the weaker default.
     #[test]
-    fn immediate_abort_rejects_test_mode() {
-        let error = parse(&["cargo-no-alloc", "--immediate-abort", "--", "test"])
-            .expect_err("--immediate-abort -- test cannot build");
+    fn the_removed_immediate_abort_flag_is_an_unknown_option() {
+        let error = parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"])
+            .expect_err("--immediate-abort no longer exists");
+        assert!(error.to_string().contains("--immediate-abort"), "{error}");
+    }
+
+    #[test]
+    fn strict_rejects_test_mode() {
+        let error = parse(&["cargo-no-alloc", "--strict", "--", "test"])
+            .expect_err("--strict -- test cannot build");
         // The point of rejecting at parse time is the message: rustc's own
         // failure arrives after a full sysroot rebuild and names an
         // unrelated-looking flag.
         assert!(error.to_string().contains("-- build"), "{error}");
         // Neither half is a problem on its own.
-        assert!(parse(&["cargo-no-alloc", "--immediate-abort", "--", "build"]).is_ok());
+        assert!(parse(&["cargo-no-alloc", "--strict", "--", "build"]).is_ok());
         assert!(parse(&["cargo-no-alloc", "--", "test"]).is_ok());
     }
 
     #[test]
-    fn immediate_abort_rejects_test_harness_target_selection() -> Result<()> {
+    fn strict_rejects_test_harness_target_selection() -> Result<()> {
         // `build --tests` reaches the same rustc failure as `-- test`, just
         // through target selection, and just as far into a sysroot rebuild.
         for selection in [vec!["--tests"], vec!["--all-targets"]] {
-            let mut args = vec!["cargo-no-alloc", "--immediate-abort", "--", "build"];
+            let mut args = vec!["cargo-no-alloc", "--strict", "--", "build"];
             args.extend(selection.iter().copied());
             let error = parse(&args).expect_err(&format!("{selection:?} must be rejected"));
             assert!(error.to_string().contains("test-harness"), "{error}");
-            // Only `--immediate-abort` has the problem; plain runs still build them.
+            // Only `--strict` has the problem; plain runs still build them.
             let mut plain = vec!["cargo-no-alloc", "--", "build"];
             plain.extend(selection.iter().copied());
             assert!(parse(&plain).is_ok(), "{selection:?} without the flag");
@@ -528,36 +551,15 @@ mod tests {
             vec!["--benches"],
             vec!["--test", "ui"],
         ] {
-            let mut args = vec!["cargo-no-alloc", "--immediate-abort", "--", "build"];
+            let mut args = vec!["cargo-no-alloc", "--strict", "--", "build"];
             args.extend(selection.iter().copied());
             assert!(parse(&args).is_ok(), "{selection:?} must be allowed");
         }
         // Target selections that build no harness stay accepted.
-        assert!(parse(&[
-            "cargo-no-alloc",
-            "--immediate-abort",
-            "--",
-            "build",
-            "--lib"
-        ])
-        .is_ok());
-        assert!(parse(&[
-            "cargo-no-alloc",
-            "--immediate-abort",
-            "--",
-            "build",
-            "--examples"
-        ])
-        .is_ok());
+        assert!(parse(&["cargo-no-alloc", "--strict", "--", "build", "--lib"]).is_ok());
+        assert!(parse(&["cargo-no-alloc", "--strict", "--", "build", "--examples"]).is_ok());
         // Arguments after the test-runner separator are not target selection.
-        parse(&[
-            "cargo-no-alloc",
-            "--immediate-abort",
-            "--",
-            "build",
-            "--",
-            "--tests",
-        ])?;
+        parse(&["cargo-no-alloc", "--strict", "--", "build", "--", "--tests"])?;
         Ok(())
     }
 
@@ -630,7 +632,7 @@ mod tests {
         for flag in [
             "--all-crates",
             "--build-std",
-            "--immediate-abort",
+            "--strict",
             "--warn-only",
             "--root",
             "--help",

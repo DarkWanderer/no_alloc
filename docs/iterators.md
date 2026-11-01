@@ -4,39 +4,51 @@ Iterators are the case where "does this reach the allocator?" and "can this
 tool prove it?" come apart the furthest. `slice.iter().map(..).sum()`
 allocates nothing at runtime, and until the changes in ADRs
 [0005](../adr/0005-intrinsic-leaf-classification.md),
-[0006](../adr/0006-immediate-abort-checking-mode.md) and
-[0007](../adr/0007-shim-and-fn-item-resolution.md) this checker could not
-verify a single iterator pattern — not one, in any configuration.
+[0006](../adr/0006-immediate-abort-checking-mode.md),
+[0007](../adr/0007-shim-and-fn-item-resolution.md) and
+[0008](../adr/0008-panic-paths-out-of-scope-by-default.md) this checker could
+not verify a single iterator pattern in its default configuration.
 
 This document is the measured answer: what passes now, what does not, and
 why. Everything in the tables comes from
 [`examples/iterators`](../examples/iterators), which is 35 `#[no_alloc]`
-roots you can re-run yourself.
+roots you can re-run yourself, measured on `nightly-2026-08-01`.
 
 ## The short version
 
 ```bash
-cargo no-alloc --immediate-abort -- build
+cargo no-alloc -- build            # panic paths out of scope (default)
+cargo no-alloc --strict -- build   # panic paths checked too
 ```
 
-`--immediate-abort` rebuilds the crate *and* the standard library with
-`-Cpanic=immediate-abort`, so every panic lowers to a bare `abort()` with no
-handler call. Without it, iterator code does not reject because of anything
-it does — it rejects because the panic machinery threaded through
-`slice::Iter` has no MIR in the precompiled sysroot.
+Iterator code reaches the panic machinery everywhere: `slice::Iter::next`
+calls `usize::unchecked_sub`, whose UB-check precondition calls
+`core::panicking::panic_nounwind_fmt`, and overflow checks in adapters lower
+to `Assert` terminators. In the default mode those are panic paths, out of
+scope ([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)): the
+walk stops at the panic entry point. Under `--strict` the crate and the
+standard library are rebuilt with `-Cpanic=immediate-abort`, so every panic
+lowers to a bare `abort()`, and the walk goes all the way down to it.
 
 | Configuration | Roots passing (of 35) |
 |---|---|
-| default (`panic = "unwind"`) | 0 |
-| `[profile.dev] panic = "abort"` | 0 |
-| `--immediate-abort` | 33 |
+| default (`panic = "unwind"`) | 33 |
+| default, `[profile.dev] panic = "abort"` | 33 |
+| `--strict` | 33 |
 
 The other two are a real allocation and a real function pointer, both
-described below.
+described below, and they are the same two in every configuration. Before
+ADR 0008 the first two rows were 0: every root rejected inside the panic
+machinery, at a function the precompiled sysroot ships no MIR for.
+
+The rows mean different things. A default-mode `Pass` says no allocator is
+reachable except through a panic; a `--strict` `Pass` also says the panic
+paths (compiled to `abort`) cannot allocate. `report.json` records which, as
+`panic_paths` on each root's `environment`.
 
 ## What passes
 
-All of these pass under `--immediate-abort`, on `&[f32]`/`&[u32]` slices:
+All of these pass in every configuration above, on `&[f32]`/`&[u32]` slices:
 
 | Category | Patterns |
 |---|---|
@@ -48,7 +60,8 @@ All of these pass under `--immediate-abort`, on `&[f32]`/`&[u32]` slices:
 | Comparison and callbacks | `max`, `max_by(\|a, b\| a.cmp(b))`, `min_by_key`, `flat_map`, `.scan(..).last()` |
 
 Nothing here is a special case in the checker: each one is walked to its
-leaves, and the leaves are arithmetic, memory primitives, and `abort`.
+leaves, and the leaves are arithmetic, memory primitives, and either a panic
+entry point (default) or `abort` (`--strict`).
 
 ## What is still rejected
 
@@ -67,9 +80,8 @@ sorted
 `partition` selects its implementation through an actual `fn` pointer, so
 there is no single body for the traversal to walk to, and
 [ADR 0003](../adr/0003-reject-unresolved-edges.md) says reject rather than
-assume. Nothing about `--immediate-abort` changes that, and nothing should:
-this is the tool reporting a real limit on what it can see, not a modelling
-gap.
+assume. Neither mode changes that, and nothing should: this is the tool
+reporting a real limit on what it can see, not a modelling gap.
 
 Comparison-driven adapters used to be in this section for a much worse
 reason. `max`, `min_by_key`, `flat_map` and `.scan(..).last()` reach their
@@ -83,39 +95,19 @@ were.
 
 `collects_into_vec` — `iter.copied().collect::<Vec<_>>()` — is reported as a
 violation in *every* configuration, with the chain down to
-`alloc::alloc::__rust_alloc_zeroed`. That is the point of including it: the
-mode that makes 33 patterns pass does not make an allocating one pass.
-
-## Why the other configurations get zero
-
-Under the default `panic = "unwind"`, an `Assert` terminator rejects
-outright ([ADR 0003](../adr/0003-reject-unresolved-edges.md)) — the
-already-documented default-configuration story, and the reason the
-[guarantee doc](guarantees.md) tells you to set `panic = "abort"` before expecting anything to pass.
-
-`panic = "abort"` disposes of the `Assert` problem and gets no further,
-because a panic is not only an `Assert`. `slice::Iter::next` calls
-`usize::unchecked_sub`; that call's UB-check precondition calls
-`core::panicking::panic_nounwind_fmt`, an ordinary `Call` terminator into a
-function the precompiled sysroot ships no MIR for. Rejecting it is correct —
-the traversal genuinely cannot see what it does. Measured across the 35
-roots in this configuration: 34 rejections, every one of them inside the
-panic machinery (`panic_nounwind_fmt` 29, `panic_fmt` 3, `panic` 1,
-`expect_failed` 1), and the 35th is `collects_into_vec`'s violation. Not one
-rejection is at anything that allocates.
-
-`--immediate-abort` removes the machinery instead of excusing it. Panic paths
-are then *walked*, and they end at `core::intrinsics::abort`, which
-[ADR 0005](../adr/0005-intrinsic-leaf-classification.md)'s intrinsic table
-classifies as a leaf that cannot reach the allocator. Note what this does
-*not* do: it does not add a panic-path carve-out. In this mode the panic path
-is checked like any other.
+`alloc::alloc::__rust_alloc_zeroed`. That is the point of including it:
+neither leaving panic paths out of scope nor rebuilding std makes an
+allocating pattern pass.
 
 ## Caveats worth stating out loud
 
-- **The verdict is about the build the checker made.** A crate checked with
-  `--immediate-abort` and shipped with `panic = "unwind"` has a panic runtime
-  in its shipped binary that allocates. What was proven is that the
+- **The default verdict excludes panic paths.** With `std`, a panic formats
+  and prints, which allocates; the default mode does not look. If that
+  matters, use `--strict`, whose verdict covers the panic paths as compiled
+  to `abort`.
+- **A `--strict` verdict is about the build the checker made.** A crate
+  checked with `--strict` and shipped with `panic = "unwind"` has a panic
+  runtime in its shipped binary that allocates. What was proven is that the
   *non-panicking* code contains no allocation, and that under an immediate
   abort there is no panic path that allocates either.
 - **Verdicts are per-instantiation** ([ADR 0001](../adr/0001-mono-site-analysis.md)).
@@ -125,17 +117,18 @@ is checked like any other.
   about how that toolchain's standard library is written, not about the
   `Iterator` API. A std change to how an adapter is specialized can move a
   pattern from one column to the other; that is what
-  `tests/ui/iterator_immediate_abort` exists to catch.
-- **`--immediate-abort` rebuilds std on every run**, on top of the
-  from-scratch rebuild every `cargo no-alloc` run already performs. Budget
-  minutes, not seconds.
+  `tests/ui/strict_iterator` and `tests/ui/panic_out_of_scope` exist to
+  catch.
+- **`--strict` rebuilds std on every run**, on top of the from-scratch
+  rebuild every `cargo no-alloc` run already performs. Budget minutes, not
+  seconds. The default mode does not.
 
 ## Reproducing
 
 ```bash
 cd examples/iterators
-cargo no-alloc --immediate-abort -- build   # 33 pass, 1 reject, 1 violation
-cargo no-alloc -- build                     # 0 pass
+cargo no-alloc -- build            # 33 pass, 1 reject, 1 violation
+cargo no-alloc --strict -- build   # 33 pass, 1 reject, 1 violation
 ```
 
 The report each run writes to `target/no-alloc/report.json` is the machine-

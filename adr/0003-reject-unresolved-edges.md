@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended 2026-08-23, 2026-08-25, 2026-09-03, 2026-10-21, and 2026-10-30.
+Accepted, amended 2026-08-23, 2026-08-25, 2026-09-03, 2026-10-21, 2026-10-30, and 2026-10-31.
 
 ## Decision
 
@@ -21,7 +21,7 @@ explicitly. The exhaustive classification is:
 | `Call`, `TailCall` | Traverse a resolved instance; otherwise reject. A callee whose operand *type* is `FnDef` is resolved (ADR 0007); an intrinsic is classified against the table in ADR 0005 |
 | `Drop` | Traverse required drop glue; no-op drop is safe |
 | `InlineAsm` | Reject as opaque |
-| `Assert` | Out of scope (not traversed) under `panic=abort`; traversed into the panic lang item codegen calls under `-Cpanic=immediate-abort` (ADR 0006); reject under `panic=unwind` |
+| `Assert` | Default mode: out of scope under every panic strategy (ADR 0008). `--strict`: out of scope (not traversed) under `panic=abort`; traversed into the panic lang item codegen calls under `-Cpanic=immediate-abort` (ADR 0006); reject under `panic=unwind` |
 | `Goto`, `SwitchInt`, `Return` | Safe control flow |
 | `Unreachable` | Safe: codegens to a bare LLVM `unreachable`, no code |
 | `UnwindResume`, `UnwindTerminate` | Out of scope: no MIR callee, but each lowers to a real call (a foreign unwind-support routine, or a nounwind panic-handler call) that this traversal does not follow |
@@ -116,6 +116,16 @@ callee rejects like any other unresolved call. Thus indexing (`Assert`) can
 pass under `panic=abort` while `get(index).unwrap()` (`Call`) rejects under the
 same profile. The `explicit_panic` and `panic_abort` fixtures pin the boundary.
 
+(Amended 2026-10-31, ADR 0008: the two paragraphs above now describe
+`--strict` only. In the default mode the exclusion is panic-shaped after all:
+an `Assert` is out of scope under every strategy, and a call to a sysroot
+panic entry point named in `no_alloc_report`'s panic table ends the walk. The
+`explicit_panic` and `panic_abort` fixtures now pin the default-mode side, both
+passing; the strict-mode boundary is pinned by `strict_host_panic_reject`
+(`unwrap` rejects at `unwrap_failed`, indexing at its `Assert` under
+`unwind`). A
+bodiless callee that is not in that table still rejects.)
+
 (Amended 2026-08-25: this ADR previously described the immediate-abort case
 as a std *feature*, `-Zbuild-std-features=panic_immediate_abort`. On the
 pinned nightly it is a real panic strategy and asking for the old feature is
@@ -135,4 +145,5 @@ that exclusion explicitly. A `--strict-panics` mode that resolves the panic
 lang items and traverses them as real edges would close this gap for plain
 `panic=abort`; it is not implemented. `--immediate-abort` (ADR 0006) closes
 it a different way, by removing the panic runtime so those edges have nothing
-left to hide.
+left to hide. (Amended 2026-10-31: ADR 0008 makes that the opt-in mode,
+renamed `--strict`, and makes panic paths out of scope by default.)

@@ -1,0 +1,83 @@
+error: no_alloc: this function may reach the global allocator
+   --> src/main.rs:33:1
+    |
+ 33 | fn via_function_name(flag: bool) -> u32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `via_function_name`
+   --> src/main.rs:33:1
+    |
+ 33 | fn via_function_name(flag: bool) -> u32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `unwrap_failed`
+   --> src/main.rs:35:9
+    |
+ 35 |         unwrap_failed(2);
+    |         ^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<u32>::new`
+   --> src/main.rs:20:17
+    |
+ 20 |     let boxed = Box::new(code);
+    |                 ^^^^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: no_alloc: this function may reach the global allocator
+   --> src/main.rs:25:1
+    |
+ 25 | fn via_module_path(flag: bool) -> u32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: via `via_module_path`
+   --> src/main.rs:25:1
+    |
+ 25 | fn via_module_path(flag: bool) -> u32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `core::panicking::panic_fmt`
+   --> src/main.rs:27:9
+    |
+ 27 |         crate::core::panicking::panic_fmt(1);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::boxed::Box::<u32>::new`
+   --> src/main.rs:13:25
+    |
+ 13 |             let boxed = Box::new(code);
+    |                         ^^^^^^^^^^^^^^
+note: via `std::boxed::box_new_uninit`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:19
+    |
+290 |         let ptr = box_new_uninit(<T as SizedTypeProperties>::LAYOUT) as *mut T;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::alloc::Global::alloc_impl_runtime`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+    |
+418 | /         core::intrinsics::const_eval_select(
+419 | |             (layout, zeroed),
+420 | |             Global::alloc_impl_const,
+421 | |             Global::alloc_impl_runtime,
+422 | |         )
+    | |_________^
+note: via `alloc::alloc::__rust_alloc_zeroed`
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+    |
+284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `panic_table_user_path` (bin "panic_table_user_path") due to 2 previous errors

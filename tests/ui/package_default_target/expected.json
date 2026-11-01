@@ -3,5 +3,5 @@
   "selection_errors": [
     "workspace manifest(s) `<case>/Cargo.toml` (`default-target`) set a per-package target, but the checker owns its target and always builds for the host, which replaces it, so the shipped build's target code would go unchecked; remove `default-target` / `forced-target`"
   ],
-  "schema_version": 2
+  "schema_version": 3
 }

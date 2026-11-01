@@ -4,7 +4,8 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use no_alloc_report::{
-    parse_root_spec, Environment, Frame, PanicStrategy, Report, RootVerdict, Verdict,
+    is_panic_entry_point, parse_root_spec, Environment, Frame, PanicPaths, PanicStrategy, Report,
+    RootVerdict, Verdict,
 };
 
 fn deep_report(depth: usize) -> Report {
@@ -22,6 +23,7 @@ fn deep_report(depth: usize) -> Report {
             verdict: Verdict::Violation { chain },
             environment: Some(Environment {
                 panic_strategy: PanicStrategy::Abort,
+                panic_paths: PanicPaths::OutOfScope,
                 opt_level: "No".into(),
                 mir_opt_level: 1,
                 overflow_checks: false,
@@ -44,6 +46,27 @@ fn bench_root_spec_parsing(c: &mut Criterion) {
         .join(",");
     c.bench_function("parse_root_spec/64_entries", |b| {
         b.iter(|| parse_root_spec(std::hint::black_box(&spec)))
+    });
+}
+
+// The default mode asks the panic table about every instance it visits, and
+// most of those are not panic entry points, so the miss path matters most.
+fn bench_panic_table_lookup(c: &mut Criterion) {
+    let paths = [
+        "core::option::unwrap_failed",
+        "core::panicking::panic_const::panic_const_add_overflow",
+        "core::slice::index::slice_index_fail",
+        "core::slice::<impl [T]>::iter",
+        "alloc::raw_vec::RawVecInner::with_capacity_in",
+        "std::process::abort",
+    ];
+    c.bench_function("panic_table/lookup_6_mixed", |b| {
+        b.iter(|| {
+            paths
+                .iter()
+                .filter(|path| is_panic_entry_point(std::hint::black_box(path)))
+                .count()
+        })
     });
 }
 
@@ -72,6 +95,7 @@ fn bench_report_merge(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_root_spec_parsing,
+    bench_panic_table_lookup,
     bench_report_serialize,
     bench_report_round_trip,
     bench_report_merge

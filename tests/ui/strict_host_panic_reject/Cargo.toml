@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "strict_host_panic_reject"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+[build-dependencies]
+no_alloc_check = { path = "../../../crates/no_alloc_check" }
+
+# The build script is the subject of this case, and `host_swap_large` needs it
+# optimized: only then is `mem::swap` of a large array lowered through the
+# intrinsic's fallback body (ADR 0005).
+[profile.dev.build-override]
+opt-level = 1
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_alloc_check)'] }

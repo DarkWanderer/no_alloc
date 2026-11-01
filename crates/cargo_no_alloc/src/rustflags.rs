@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::Path;
 
-/// Added by `--immediate-abort`. `-Cpanic=immediate-abort` is still
+/// Added by `--strict`. `-Cpanic=immediate-abort` is still
 /// unstable, hence the accompanying `-Zunstable-options`. Passing it here
 /// rather than asking users to set `[profile.dev] panic = "immediate-abort"`
 /// keeps the checked crate's own manifest stable-buildable: the manifest key
@@ -132,10 +132,10 @@ pub(crate) fn reject_ambient_immediate_abort(
     Err(refuse(
         report_path,
         "the environment's or Cargo config's Rust flags already select `-Cpanic=immediate-abort`, but neither \
-         `--immediate-abort` nor `--build-std` was passed. That strategy only means what the \
+         `--strict` nor `--build-std` was passed. That strategy only means what the \
          report says it means if the standard library is rebuilt with it too; pass \
-         `--immediate-abort` (which does both) or `--build-std` (if you are setting the \
-         strategy yourself)"
+         `--strict` (which does both and also checks panic paths) or `--build-std` (if you \
+         are setting the strategy yourself)"
             .to_owned(),
     ))
 }
@@ -310,7 +310,7 @@ pub(crate) fn config_rustflags(
 /// pre-flight guard, so the two cannot see different flags.
 pub(crate) fn add_required_rustflags(
     ambient: Option<&AmbientRustflags>,
-    immediate_abort: bool,
+    std_mode: StdMode,
 ) -> (&'static str, String) {
     // Two passes, and the order matters. The always-required flags are added
     // only when absent, so an inherited copy is left alone. The panic
@@ -318,9 +318,9 @@ pub(crate) fn add_required_rustflags(
     // last-wins: "already present somewhere" is not the same as "in effect",
     // and an inherited `-Cpanic=immediate-abort ... -Cpanic=unwind` would
     // otherwise satisfy a presence test while the build ran under unwind,
-    // with `--immediate-abort` quietly not happening. Repeating the flag is
-    // harmless; being outvoted by it is not.
-    let panic_strategy: &[&str] = if immediate_abort {
+    // with `--strict` quietly not happening. Repeating the flag is harmless;
+    // being outvoted by it is not.
+    let panic_strategy: &[&str] = if std_mode.is_strict() {
         IMMEDIATE_ABORT_RUSTFLAGS
     } else {
         &[]
@@ -457,13 +457,13 @@ mod tests {
     }
 
     #[test]
-    fn immediate_abort_flag_is_appended_even_when_an_equal_flag_is_inherited() {
+    fn strict_panic_flag_is_appended_even_when_an_equal_flag_is_inherited() {
         // `-Cpanic` is last-wins, so "already present somewhere" is not the
         // same as "in effect": an inherited pair ending in `-Cpanic=unwind`
         // must not stop the checker's own copy from being appended last.
         let ambient =
             AmbientRustflags::Encoded("-Cpanic=immediate-abort\u{1f}-Cpanic=unwind".into());
-        let (name, outvoted) = add_required_rustflags(Some(&ambient), true);
+        let (name, outvoted) = add_required_rustflags(Some(&ambient), StdMode::Strict);
         assert_eq!(name, "CARGO_ENCODED_RUSTFLAGS");
         let last = outvoted.split('\u{1f}').next_back().unwrap_or_default();
         assert_eq!(last, "-Cpanic=immediate-abort", "in `{outvoted}`");
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn ambient_guard_accepts_build_std_without_the_immediate_abort_flag() {
         // The exact case this round found: `--build-std` alone, no
-        // `--immediate-abort`, ambient flags already selecting the
+        // `--strict`, ambient flags already selecting the
         // strategy — coherent, and must not be pre-flight rejected.
         let ambient = AmbientRustflags::Encoded("-Cpanic=immediate-abort".into());
         assert!(!ambient_immediate_abort_needs_build_std(
@@ -506,7 +506,7 @@ mod tests {
                 ambient_immediate_abort_needs_build_std(StdMode::Precompiled, Some(ambient)),
                 "{ambient:?}"
             );
-            let (name, value) = add_required_rustflags(Some(ambient), false);
+            let (name, value) = add_required_rustflags(Some(ambient), StdMode::Precompiled);
             let expected = if matches!(ambient, AmbientRustflags::Plain(_)) {
                 "RUSTFLAGS"
             } else {
@@ -570,12 +570,15 @@ mod tests {
     }
 
     #[test]
-    fn immediate_abort_rustflags_are_added_only_when_asked_for() {
+    fn immediate_abort_rustflags_are_added_only_under_strict() {
         // Nothing ambient: the function no longer reads the environment, so a
         // developer's own exported `-Cpanic=immediate-abort` cannot leak in.
-        let (name, without) = add_required_rustflags(None, false);
+        let (name, without) = add_required_rustflags(None, StdMode::Precompiled);
         assert_eq!(name, "RUSTFLAGS");
-        let (_, with) = add_required_rustflags(None, true);
+        let (_, with) = add_required_rustflags(None, StdMode::Strict);
+        // `--build-std` alone rebuilds std but leaves the strategy alone.
+        let (_, build_std) = add_required_rustflags(None, StdMode::BuildStd);
+        assert_eq!(build_std, without);
         for flag in IMMEDIATE_ABORT_RUSTFLAGS {
             assert!(!without.contains(flag), "unasked-for `{flag}`");
             assert!(with.contains(flag), "missing `{flag}`");
@@ -665,7 +668,7 @@ mod tests {
         let imported = strings(&["--cfg", "heap", "-Cllvm-args=a b"]);
         let (name, merged) = add_required_rustflags(
             AmbientRustflags::from_config(imported.clone()).as_ref(),
-            true,
+            StdMode::Strict,
         );
         assert_eq!(name, "CARGO_ENCODED_RUSTFLAGS");
         // With the user's own variable set, config is not consulted by Cargo,
@@ -675,7 +678,7 @@ mod tests {
         let user = AmbientRustflags::from_env(None, Some("--cfg user".into()))
             .ok()
             .flatten();
-        let (shadowed_name, shadowed) = add_required_rustflags(user.as_ref(), false);
+        let (shadowed_name, shadowed) = add_required_rustflags(user.as_ref(), StdMode::Precompiled);
         assert_eq!(shadowed_name, "RUSTFLAGS");
         let parts: Vec<&str> = merged.split('\x1f').collect();
         assert_eq!(

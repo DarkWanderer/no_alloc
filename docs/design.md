@@ -19,10 +19,12 @@ Cargo external subcommands receive `no-alloc` as their first forwarded
 argument; the wrapper removes it before parsing checker flags. Only `build`
 and `test` are accepted because `check` does not populate the codegen mono
 graph. Forced `--target`, `--target-dir`, and `-Zbuild-std` options are placed
-before a test-runner `--` separator. `--immediate-abort` implies
-`-Zbuild-std` and adds `-Zunstable-options -Cpanic=immediate-abort` to the
+before a test-runner `--` separator. `--strict` implies
+`-Zbuild-std`, adds `-Zunstable-options -Cpanic=immediate-abort` to the
 injected rustc flags, so the checked crate's own manifest needs no
-nightly-only keys.
+nightly-only keys, and sets `NO_ALLOC_STRICT=1` so the driver walks panic
+paths instead of stopping at them
+([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)).
 
 The wrapper uses the executable named by `CARGO`, preserves existing Rust
 flags, and ignores (with a warning) rustc-wrapper configuration, since the
@@ -94,16 +96,16 @@ violations take priority over rejections.
 
 The terminator classification is documented in
 [ADR 0003](../adr/0003-reject-unresolved-edges.md). In particular, terminal
-unwind control flow is not a call. Assertions pass only under a compiler-known
-non-unwinding panic strategy and otherwise reject. That "pass" is a scope
-exclusion, not a proof, and it is drawn by terminator shape: an explicit
-`panic!()` or `.unwrap()` is an ordinary `Call` terminator that remains in
-scope and rejects if unresolved ([`guarantees.md`](guarantees.md)).
-Under `--immediate-abort`
+unwind control flow is not a call. By default panic paths are out of scope
+([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)): an
+assertion is not followed, and a call to a sysroot panic entry point in the
+audited panic table (`no_alloc_report::is_panic_entry_point`, keyed by
+defining path) ends the walk. That is a scope exclusion, not a proof
+([`guarantees.md`](guarantees.md)). Under `--strict`
 ([ADR 0006](../adr/0006-immediate-abort-checking-mode.md)), which rebuilds
-std with `-Cpanic=immediate-abort`, panic paths, including the lang item an
-assertion calls, are real, walkable edges ending in `intrinsics::abort` and
-need no exclusion.
+std with `-Cpanic=immediate-abort`, the table is not consulted: panic paths,
+including the lang item an assertion calls, are real, walkable edges ending
+in `intrinsics::abort` and need no exclusion.
 [`iterators.md`](iterators.md) is the measured consequence.
 
 ## Verification

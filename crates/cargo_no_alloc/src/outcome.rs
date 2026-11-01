@@ -220,9 +220,9 @@ pub(crate) fn finalize(
         !mixed_sysroot,
         "this build compiled with `-Cpanic=immediate-abort` against the precompiled standard \
          library, which carries its own panic runtime — so the report's verdicts would claim \
-         panic paths that lower to `abort` when std's do not. Pass `--immediate-abort`, which \
+         panic paths that lower to `abort` when std's do not. Pass `--strict`, which \
          applies the strategy to both halves, or `--build-std` if you are setting the \
-         strategy yourself (see docs/iterators.md)"
+         strategy yourself (see docs/guarantees.md)"
     );
     if !cargo_status.success() {
         bail!("Cargo exited with {cargo_status}");
@@ -286,6 +286,7 @@ mod tests {
             verdict: Verdict::Pass,
             environment: Some(Environment {
                 panic_strategy,
+                panic_paths: no_alloc_report::PanicPaths::Checked,
                 opt_level: "No".into(),
                 mir_opt_level: 1,
                 overflow_checks: false,
@@ -349,6 +350,7 @@ mod tests {
                 verdict: Verdict::Pass,
                 environment: Some(Environment {
                     panic_strategy: PanicStrategy::ImmediateAbort,
+                    panic_paths: no_alloc_report::PanicPaths::Checked,
                     opt_level: "No".into(),
                     mir_opt_level: 1,
                     overflow_checks: false,
@@ -385,7 +387,7 @@ mod tests {
         // `--build-std` rebuilds the sysroot under the same flags, so the
         // same observation is coherent once it is set.
         assert!(!mixed_sysroot_panic_strategy(StdMode::BuildStd, true));
-        assert!(!mixed_sysroot_panic_strategy(StdMode::ImmediateAbort, true));
+        assert!(!mixed_sysroot_panic_strategy(StdMode::Strict, true));
         // Nothing observed has nothing to be mixed with.
         assert!(!mixed_sysroot_panic_strategy(StdMode::Precompiled, false));
     }
@@ -487,6 +489,7 @@ mod tests {
                 verdict: Verdict::Pass,
                 environment: Some(Environment {
                     panic_strategy: PanicStrategy::Unwind,
+                    panic_paths: no_alloc_report::PanicPaths::OutOfScope,
                     opt_level: "No".into(),
                     mir_opt_level: 1,
                     overflow_checks: true,

@@ -21,6 +21,7 @@
       },
       "environment": {
         "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
         "opt_level": "No",
         "mir_opt_level": 1,
         "overflow_checks": true,
@@ -33,5 +34,5 @@
     }
   ],
   "panic_strategy": "unwind",
-  "schema_version": 2
+  "schema_version": 3
 }

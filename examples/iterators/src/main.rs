@@ -1,14 +1,13 @@
 //! Every iterator pattern in `docs/iterators.md`, as one runnable crate.
 //!
 //! ```bash
-//! cargo no-alloc --immediate-abort -- build
+//! cargo no-alloc -- build            # panic paths out of scope
+//! cargo no-alloc --strict -- build   # panic paths checked too
 //! ```
 //!
-//! Expect 33 of the 35 roots to pass, `sort_in_place` to be rejected at a
-//! genuine `fn` pointer inside the sort, and `collects_into_vec` to be
-//! reported as a real violation. Drop the `--immediate-abort` and all 33 of
-//! those passes turn into rejections inside the panic machinery — that is
-//! the whole point of the mode, and of the document.
+//! Measured in both modes: 33 of the 35 roots pass, `sort_in_place` is
+//! rejected at a genuine `fn` pointer inside the sort, and
+//! `collects_into_vec` is reported as a real violation.
 
 use no_alloc_check::no_alloc;
 

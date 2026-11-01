@@ -1,0 +1,68 @@
+error: no_alloc: this function has an unresolved call (no statically available MIR body for this callee)
+    --> app/build.rs:16:1
+     |
+  16 | fn shared_swap(a: &mut [u64; 16], b: &mut [u64; 16]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: via `shared_swap`
+    --> app/build.rs:16:1
+     |
+  16 | fn shared_swap(a: &mut [u64; 16], b: &mut [u64; 16]) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `upstream_opt_dep::swap_generic::<[u64; 16]>`
+    --> app/build.rs:17:5
+     |
+  17 |     upstream_opt_dep::swap_generic(a, b)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::mem::swap::<[u64; 16]>`
+    --> dep/src/lib.rs:5:5
+     |
+   5 |     core::mem::swap(a, b)
+     |     ^^^^^^^^^^^^^^^^^^^^^
+note: via `std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]> - intrinsic`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/mem/mod.rs:831:14
+     |
+ 831 |     unsafe { intrinsics::typed_swap_nonoverlapping(x, y) }
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2737:1
+     |
+2737 | pub const unsafe fn typed_swap_nonoverlapping<T>(x: *mut T, y: *mut T) {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::ptr::swap_nonoverlapping::<[u64; 16]>`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2740:14
+     |
+2740 |     unsafe { ptr::swap_nonoverlapping(x, y, 1) };
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::ptr::swap_nonoverlapping::precondition_check`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:78:17
+     |
+  78 |                   precondition_check($($arg,)*);
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1384:5
+     |
+1384 | /     ub_checks::assert_unsafe_precondition!(
+1385 | |         check_library_ub,
+1386 | |         "ptr::swap_nonoverlapping requires that both pointer arguments are aligned and non-null \
+1387 | |         and the specified memory ranges do not overlap",
+...    |
+1400 | |     );
+     | |_____- in this macro invocation
+note: via `std::ptr::const_ptr::<impl *const ()>::is_aligned_to`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:141:13
+     |
+ 141 |             ptr.is_aligned_to(align)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^
+note: via `std::rt::panic_fmt`
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/panic.rs:62:9
+     |
+  62 |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/const_ptr.rs:1356:13
+     |
+1356 |             panic!("is_aligned_to: align is not a power-of-two");
+     |             ---------------------------------------------------- in this macro invocation
+
+error: could not compile `upstream_opt_app` (build script) due to 1 previous error

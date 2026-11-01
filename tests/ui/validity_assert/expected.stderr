@@ -1,18 +1,18 @@
 error: no_alloc: this function has an unresolved call (`assert_zero_valid::<&u8>` does not hold, so this call compiles to a panic)
-   --> src/main.rs:15:1
+   --> src/main.rs:17:1
     |
- 15 | fn not_zeroable() -> usize {
+ 17 | fn not_zeroable() -> usize {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
     |
 note: via `not_zeroable`
-   --> src/main.rs:15:1
+   --> src/main.rs:17:1
     |
- 15 | fn not_zeroable() -> usize {
+ 17 | fn not_zeroable() -> usize {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::mem::zeroed::<&u8>`
-   --> src/main.rs:19:35
+   --> src/main.rs:21:35
     |
- 19 |     let reference: &u8 = unsafe { std::mem::zeroed() };
+ 21 |     let reference: &u8 = unsafe { std::mem::zeroed() };
     |                                   ^^^^^^^^^^^^^^^^^^
 note: via `std::intrinsics::assert_zero_valid::<&u8> - intrinsic`
    --> <sysroot>/lib/rustlib/src/rust/library/core/src/mem/mod.rs:756:9

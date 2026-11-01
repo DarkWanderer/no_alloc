@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- Panic paths are out of scope by default: the default guarantee is now
+  "no allocation on any non-panicking path" (ADR 0008). A call to a
+  standard-library panic entry point in the new audited panic table
+  (`no_alloc_report::is_panic_entry_point`: `panic_fmt`, `unwrap_failed`,
+  `expect_failed`, `slice_index_fail`, the `panic_const_*` lang items,
+  `begin_panic`, ...) ends the walk, and an `Assert` terminator is out of
+  scope under every panic strategy, `unwind` included. `.unwrap()`,
+  indexing, `panic!()` and iterator chains now pass by default when nothing
+  else in them allocates, and `-- test` is usable. A diverging function that
+  is not a panic (`process::abort`, `process::exit`, `handle_alloc_error`)
+  is still walked or rejected.
+- `--immediate-abort` is removed (an unknown option, not an alias). The same
+  mode is now `--strict`: it implies `--build-std`, compiles everything with
+  `-Cpanic=immediate-abort`, and also tells the analysis to walk panic paths
+  instead of stopping at them.
+- Fixtures `panic_out_of_scope`, `panic_message_allocates`,
+  `panic_table_unknown_rejects`, `panic_table_user_path`,
+  `strict_host_panic_reject` and `strict_host_fallback_upstream_opt`; the
+  `*_immediate_abort` fixtures are renamed `strict_*`, and `iterator_reject`
+  is removed (it now passes, covered by `panic_out_of_scope`).
+- Report schema version 3: each root's `environment` records `panic_paths`
+  (`"out_of_scope"` or `"checked"`). A schema-2 environment reads back as
+  `"checked"`, the only behaviour it could have had.
+
 ### Added
 
 - `--root` accepts a comma-separated list of paths and may be repeated; a
@@ -33,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the existing definition-level `def_path` — so `report.json`
   records which instantiation a chain frame refers to, matching what the
   rendered diagnostic already showed.
-- `--immediate-abort`, which builds the crate and the standard library with
+- `--immediate-abort` (since replaced by `--strict`, see Breaking), which
+  builds the crate and the standard library with
   `-Cpanic=immediate-abort` (implying `--build-std`). Panic paths then lower
   to a bare `abort()` and are traversed as ordinary edges instead of being
   excluded from the guarantee. This is what makes iterator code checkable:
@@ -239,7 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outright — via the same hard-error mechanism ordinary findings use — so
   it can never coexist with a successful build; only a genuinely passing
   one can, and that verdict is never weaker than the target's. Pinned by
-  `tests/ui/immediate_abort_host_root`.
+  `tests/ui/strict_host_root`.
 - README and ADR 0003 no longer point at `-Zbuild-std-features=panic_immediate_abort`,
   which is a `compile_error!` on the pinned nightly — it is a panic strategy
   now, and `--immediate-abort` supplies it.

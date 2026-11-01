@@ -11,13 +11,14 @@ soundly.
 Run the checker with Cargo arguments after `--`:
 
 ```text
-cargo no-alloc [--all-crates] [--build-std] [--immediate-abort]
+cargo no-alloc [--all-crates] [--build-std] [--strict]
                [--warn-only] [--root PATH]... -- [build|test] [CARGO_ARGS...]
 ```
 
 `build` is the default. `check` is rejected because it does not produce the
-monomorphized graph. `test` is accepted but is not a supported mode for
-meaningful results — see [Guarantee and limitations](guarantees.md). The checker owns
+monomorphized graph. `test` checks the code as compiled for tests (always
+`panic=unwind`), and cannot be combined with `--strict` — see
+[Guarantee and limitations](guarantees.md). The checker owns
 its target and target directory, so user-supplied `--target` and
 `--target-dir` are rejected. `--root` selects an unannotated function by
 canonical path across the complete build; it accepts a comma-separated list
@@ -70,8 +71,11 @@ empty) holds conditions that leave the exit code at 0 but that a reader of the
 file must not mistake for a verified pass; today that is a run that checked
 zero roots, including one where every root was `not_instantiated`. Each checked root carries a versioned
 `environment` block with its typed panic strategy, optimization and MIR
-optimization levels, target triple, rustc version, and the
-`--all-crates`/`--build-std` settings. These values matter to what was proven,
+optimization levels, target triple, rustc version, the
+`--all-crates`/`--build-std` settings, and `panic_paths` — `"out_of_scope"`
+for the default mode, `"checked"` under `--strict`
+([ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md)). A `Pass`
+means something different in each, so read the two together. These values matter to what was proven,
 and recording them per root preserves the real configuration when one Cargo
 build contains both host and target artifacts. The report-level
 `panic_strategy` remains for compatibility and is omitted when those artifacts
@@ -86,14 +90,19 @@ configuration change can never be hidden by Cargo's build cache (see
 [`docs/design.md`](design.md)) — but it means every run pays full
 compile time, not just the cost of what changed.
 
-## Immediate-abort mode
+## Strict mode
 
-`--immediate-abort` rebuilds the crate and the standard library with
-`-Cpanic=immediate-abort` (implying `--build-std`, and incompatible with
-`-- test`, which rustc will not build under an abort strategy), which is
-what makes iterator-shaped code checkable at all — see
-[`docs/iterators.md`](iterators.md) and
-[ADR 0006](../adr/0006-immediate-abort-checking-mode.md).
+By default panic paths are out of scope: the guarantee is "no allocation on
+any non-panicking path" ([`guarantees.md`](guarantees.md)). `--strict` checks
+them too. It rebuilds the crate and the standard library with
+`-Zunstable-options -Cpanic=immediate-abort` (implying `--build-std`, and
+incompatible with `-- test`, `--tests` and `--all-targets`, which rustc will
+not build under an abort strategy), so every panic lowers to a bare `abort()`
+the traversal walks to — see
+[ADR 0006](../adr/0006-immediate-abort-checking-mode.md) and
+[ADR 0008](../adr/0008-panic-paths-out-of-scope-by-default.md). The sysroot
+rebuild makes each run take minutes. `--immediate-abort`, the previous name
+for this mode, has been removed and is an unknown option.
 
 ## Examples
 

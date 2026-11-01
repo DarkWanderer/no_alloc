@@ -3,8 +3,15 @@
 //! which `rustc_codegen_ssa` swaps in place for an SSA-standalone type (or
 //! at `opt-level = 0`); for a large array when optimizing, it emits a call
 //! to the intrinsic's Rust fallback body (`ptr::swap_nonoverlapping`)
-//! instead. That body is walked, so its UB-check panic path is found and
-//! rejected rather than waved through with the intrinsic.
+//! instead. That body is walked, so its UB-check panic path is found
+//! rather than waved through with the intrinsic.
+//!
+//! Since ADR 0008 both roots pass in the default mode: the only edge in the
+//! fallback body that the traversal can trip on is that UB-check panic, and
+//! panic paths are now out of scope. So this case no longer tells "walked"
+//! from "skipped"; `strict_host_panic_reject::host_swap_large` is where the
+//! fallback walk is still observed (a host unit under `--strict`, where the
+//! panic stays in scope and has no MIR).
 
 #[no_alloc_check::no_alloc]
 fn swap_large(a: &mut [u64; 16], b: &mut [u64; 16]) {

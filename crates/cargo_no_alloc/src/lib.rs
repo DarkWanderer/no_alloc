@@ -354,6 +354,8 @@ if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
             ensure!(get("NO_ALLOC_WARN_ONLY") == Some("1"), "{env:?}");
             ensure!(get("NO_ALLOC_ALL_CRATES") == Some("1"), "{env:?}");
             ensure!(get("NO_ALLOC_BUILD_STD") == Some("1"), "{env:?}");
+            // `--build-std` alone does not check panic paths (ADR 0008).
+            ensure!(get("NO_ALLOC_STRICT") == Some("0"), "{env:?}");
             ensure!(get("NO_ALLOC_ROOTS") == Some("fake::root"), "{env:?}");
             ensure!(
                 get("NO_ALLOC_FRAGMENT_DIR")
@@ -431,6 +433,7 @@ if [ "$FAKE_CARGO_FAIL" = 1 ]; then exit 1; fi
             );
             ensure!(get("NO_ALLOC_ALL_CRATES") == Some("0"), "{env:?}");
             ensure!(get("NO_ALLOC_BUILD_STD") == Some("0"), "{env:?}");
+            ensure!(get("NO_ALLOC_STRICT") == Some("0"), "{env:?}");
             ensure!(get("RUSTC") == Some(&*fake.to_string_lossy()), "{env:?}");
             ensure!(
                 get("NO_ALLOC_EXPECTED_RUSTC") == Some(&*fake.to_string_lossy()),

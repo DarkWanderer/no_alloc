@@ -5,7 +5,7 @@
 //! names to strings in `traversal.rs`) live next to their callers.
 
 use crate::roots::root_path;
-use no_alloc_report::{Environment, Frame, PanicStrategy, RootVerdict, Verdict};
+use no_alloc_report::{Environment, Frame, PanicPaths, PanicStrategy, RootVerdict, Verdict};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_session::config::OptLevel;
@@ -39,13 +39,20 @@ fn opt_level(level: OptLevel) -> &'static str {
     }
 }
 
-/// `all_crates` and `build_std` are invocation-level flags that are not
-/// visible on `Session`, so the driver reads them from its environment and
-/// passes them in.
-pub fn environment(tcx: TyCtxt<'_>, all_crates: bool, build_std: bool) -> Environment {
+/// `all_crates`, `build_std` and `panic_paths` are invocation-level settings
+/// that are not visible on `Session`, so the driver reads them from its
+/// environment and passes them in. `panic_paths` must be the value the
+/// traversal ran with; the driver passes the same one to both.
+pub fn environment(
+    tcx: TyCtxt<'_>,
+    all_crates: bool,
+    build_std: bool,
+    panic_paths: PanicPaths,
+) -> Environment {
     let sess = &tcx.sess;
     Environment {
         panic_strategy: panic_strategy(tcx),
+        panic_paths,
         opt_level: opt_level(sess.opts.optimize).to_string(),
         mir_opt_level: sess.mir_opt_level() as u32,
         overflow_checks: sess.overflow_checks(),

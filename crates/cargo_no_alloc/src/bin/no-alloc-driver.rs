@@ -12,7 +12,7 @@ extern crate rustc_middle;
 extern crate rustc_span;
 
 use no_alloc_analysis::roots::DiscoveredRoot;
-use no_alloc_report::{Environment, Report, ReportFragment};
+use no_alloc_report::{Environment, PanicPaths, Report, ReportFragment};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
@@ -27,11 +27,28 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name).as_deref() == Ok("1")
 }
 
-fn environment(tcx: TyCtxt<'_>) -> Environment {
+/// `NO_ALLOC_STRICT`, the `--strict` mode (ADR 0008). Unset means the
+/// default mode, so a direct `RUSTC=no-alloc-driver` build gets the
+/// documented default. Unlike the other flags, any value other than `0`/`1`
+/// is an error rather than "off": someone who wrote `NO_ALLOC_STRICT=true`
+/// asked for the stronger guarantee, and silently giving them the weaker one
+/// is the wrong direction to fail in.
+fn parse_strict(value: Option<&str>) -> Result<PanicPaths, String> {
+    match value {
+        None | Some("0") => Ok(PanicPaths::OutOfScope),
+        Some("1") => Ok(PanicPaths::Checked),
+        Some(other) => Err(format!(
+            "NO_ALLOC_STRICT must be `1` or `0` (or unset), not `{other}`"
+        )),
+    }
+}
+
+fn environment(tcx: TyCtxt<'_>, panic_paths: PanicPaths) -> Environment {
     no_alloc_analysis::boundary::environment(
         tcx,
         env_flag("NO_ALLOC_ALL_CRATES"),
         env_flag("NO_ALLOC_BUILD_STD"),
+        panic_paths,
     )
 }
 
@@ -42,7 +59,11 @@ fn environment(tcx: TyCtxt<'_>) -> Environment {
 /// so the two cannot drift.
 const REQUIRED_FLAGS: &[&str] = cargo_no_alloc::REQUIRED_RUSTFLAGS;
 
-struct NoAllocCallbacks;
+struct NoAllocCallbacks {
+    // Read once, before compiling, so a bad value fails the invocation up
+    // front and the traversal and the recorded environment cannot disagree.
+    panic_paths: PanicPaths,
+}
 
 impl Callbacks for NoAllocCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
@@ -57,6 +78,7 @@ impl Callbacks for NoAllocCallbacks {
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         let warn_only = env_flag("NO_ALLOC_WARN_ONLY");
+        let panic_paths = self.panic_paths;
         let discovery = no_alloc_analysis::roots::discover(tcx);
         let mut report = Report {
             roots: Vec::new(),
@@ -91,7 +113,8 @@ impl Callbacks for NoAllocCallbacks {
                 }
                 DiscoveredRoot::Instance { root, instance } => {
                     checked_an_instance = true;
-                    let checked = no_alloc_analysis::traversal::check_instance(tcx, instance);
+                    let checked =
+                        no_alloc_analysis::traversal::check_instance(tcx, instance, panic_paths);
                     if no_alloc_analysis::diagnostics::emit(tcx, &checked, warn_only) {
                         any_hard_error = true;
                     }
@@ -100,7 +123,7 @@ impl Callbacks for NoAllocCallbacks {
                         root,
                         instance,
                         checked.verdict,
-                        environment(tcx),
+                        environment(tcx, panic_paths),
                     ));
                 }
             }
@@ -210,8 +233,37 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    let mut callbacks = NoAllocCallbacks;
+    let strict = std::env::var_os("NO_ALLOC_STRICT");
+    let panic_paths = match parse_strict(
+        strict
+            .as_ref()
+            .map(|value| value.to_string_lossy())
+            .as_deref(),
+    ) {
+        Ok(panic_paths) => panic_paths,
+        Err(error) => {
+            tracing::error!("{error}");
+            eprintln!("error: no_alloc: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let mut callbacks = NoAllocCallbacks { panic_paths };
     rustc_driver::catch_with_exit_code(|| {
         rustc_driver::run_compiler(&args, &mut callbacks);
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_is_exactly_zero_or_one_and_anything_else_is_an_error() {
+        assert_eq!(parse_strict(None), Ok(PanicPaths::OutOfScope));
+        assert_eq!(parse_strict(Some("0")), Ok(PanicPaths::OutOfScope));
+        assert_eq!(parse_strict(Some("1")), Ok(PanicPaths::Checked));
+        for value in ["true", "yes", "", " 1", "01", "2"] {
+            assert!(parse_strict(Some(value)).is_err(), "`{value}`");
+        }
+    }
 }

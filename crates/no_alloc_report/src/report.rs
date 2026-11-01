@@ -1,9 +1,35 @@
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 fn legacy_schema_version() -> u32 {
     1
+}
+
+/// Reports before schema version 3 had no mode without panic paths: every
+/// `Pass` they hold was established with panic paths walked (subject to the
+/// terminator-shaped exclusions of ADR 0003, which `panic_strategy` already
+/// records). Reading them back as `Checked` is therefore what they meant.
+fn legacy_panic_paths() -> PanicPaths {
+    PanicPaths::Checked
+}
+
+/// Whether the traversal that produced a verdict walked panic paths (ADR
+/// 0008). This is both the checker's per-run configuration, handed to the
+/// traversal, and what each root's `environment` records, so the two cannot
+/// disagree: a `Pass` under `OutOfScope` says nothing about what a panic
+/// does, one under `Checked` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanicPaths {
+    /// The default: the walk stops at a standard-library panic entry point
+    /// (`is_panic_entry_point`) and at an `Assert` terminator, whatever the
+    /// panic strategy. The guarantee is "no allocation on any non-panicking
+    /// path".
+    OutOfScope,
+    /// `--strict`: panic entry points are walked like any other callee, and
+    /// `Assert` is classified per panic strategy (ADR 0003, ADR 0006).
+    Checked,
 }
 
 /// Build settings that can affect the MIR graph and therefore the verdict.
@@ -12,6 +38,10 @@ fn legacy_schema_version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Environment {
     pub panic_strategy: PanicStrategy,
+    /// Whether panic paths were in scope for this verdict. Defaulted on read
+    /// for a schema-2 report, which only ever had the `Checked` behaviour.
+    #[serde(default = "legacy_panic_paths")]
+    pub panic_paths: PanicPaths,
     pub opt_level: String,
     pub mir_opt_level: u32,
     /// `-C overflow-checks`, resolved the way rustc resolves it: the
@@ -266,6 +296,7 @@ mod tests {
     fn sample_environment(target_triple: &str) -> Environment {
         Environment {
             panic_strategy: PanicStrategy::Unwind,
+            panic_paths: PanicPaths::OutOfScope,
             opt_level: "No".to_string(),
             mir_opt_level: 1,
             overflow_checks: false,
@@ -605,6 +636,60 @@ mod tests {
         }]);
         assert_eq!(merged.selection_errors.len(), 1);
         assert!(!merged.is_success());
+    }
+
+    /// A `Pass` is only interpretable with its panic-path mode, so the field
+    /// is always written; a schema-2 environment, which predates the
+    /// out-of-scope mode, reads back as `Checked` rather than failing.
+    #[test]
+    fn panic_paths_round_trips_and_defaults_to_checked_for_schema_2(
+    ) -> Result<(), serde_json::Error> {
+        let environment = sample_environment("x86_64-unknown-linux-gnu");
+        let json = serde_json::to_string(&environment)?;
+        assert!(json.contains(r#""panic_paths":"out_of_scope""#), "{json}");
+        let strict = Environment {
+            panic_paths: PanicPaths::Checked,
+            ..environment.clone()
+        };
+        let json = serde_json::to_string(&strict)?;
+        assert!(json.contains(r#""panic_paths":"checked""#), "{json}");
+        assert_eq!(serde_json::from_str::<Environment>(&json)?, strict);
+
+        let schema_2 = r#"{"panic_strategy":"abort","opt_level":"No","mir_opt_level":1,
+            "overflow_checks":true,"debug_assertions":true,"target_triple":"t",
+            "rustc_version":"v","all_crates":false,"build_std":false}"#;
+        let legacy: Environment = serde_json::from_str(schema_2)?;
+        assert_eq!(legacy.panic_paths, PanicPaths::Checked);
+        Ok(())
+    }
+
+    /// Two verdicts on the same instance under different modes say
+    /// different things, so merging must keep both rather than dedup one.
+    #[test]
+    fn merge_keeps_roots_checked_under_different_panic_path_modes() {
+        let checked = |panic_paths| Report {
+            roots: vec![RootVerdict {
+                root: "a".into(),
+                instance: "a".into(),
+                verdict: Verdict::Pass,
+                environment: Some(Environment {
+                    panic_paths,
+                    ..sample_environment("x86_64-unknown-linux-gnu")
+                }),
+            }],
+            ..Report::default()
+        };
+        let merged = Report::merge([
+            checked(PanicPaths::OutOfScope),
+            checked(PanicPaths::Checked),
+            checked(PanicPaths::OutOfScope),
+        ]);
+        let modes: Vec<_> = merged
+            .roots
+            .iter()
+            .filter_map(|root| root.environment.as_ref().map(|e| e.panic_paths))
+            .collect();
+        assert_eq!(modes, [PanicPaths::OutOfScope, PanicPaths::Checked]);
     }
 
     #[test]

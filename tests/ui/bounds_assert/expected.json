@@ -4,18 +4,11 @@
       "root": "bounds_assert::root",
       "instance": "root",
       "verdict": {
-        "kind": "rejected",
-        "chain": [
-          {
-            "def_path": "root",
-            "instance": "root",
-            "span": null
-          }
-        ],
-        "reason": "assertion may invoke the panic handler when panic=unwind"
+        "kind": "pass"
       },
       "environment": {
         "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
         "opt_level": "No",
         "mir_opt_level": 1,
         "overflow_checks": true,
@@ -28,5 +21,5 @@
     }
   ],
   "panic_strategy": "unwind",
-  "schema_version": 2
+  "schema_version": 3
 }
