@@ -27,19 +27,19 @@ note: via `std::mem::swap::<[u64; 16]>`
   33 |     std::mem::swap(a, b);
      |     ^^^^^^^^^^^^^^^^^^^^
 note: via `std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]> - intrinsic`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/mem/mod.rs:831:14
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/mem/mod.rs:835:14
      |
- 831 |     unsafe { intrinsics::typed_swap_nonoverlapping(x, y) }
+ 835 |     unsafe { intrinsics::typed_swap_nonoverlapping(x, y) }
      |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::intrinsics::typed_swap_nonoverlapping::<[u64; 16]>`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2737:1
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2670:1
      |
-2737 | pub const unsafe fn typed_swap_nonoverlapping<T>(x: *mut T, y: *mut T) {
+2670 | pub const unsafe fn typed_swap_nonoverlapping<T>(x: *mut T, y: *mut T) {
      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::ptr::swap_nonoverlapping::<[u64; 16]>`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2740:14
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/intrinsics/mod.rs:2673:14
      |
-2740 |     unsafe { ptr::swap_nonoverlapping(x, y, 1) };
+2673 |     unsafe { ptr::swap_nonoverlapping(x, y, 1) };
      |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::ptr::swap_nonoverlapping::precondition_check`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:78:17
@@ -47,14 +47,14 @@ note: via `std::ptr::swap_nonoverlapping::precondition_check`
   78 |                   precondition_check($($arg,)*);
      |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
-    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1384:5
+    ::: <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1400:5
      |
-1384 | /     ub_checks::assert_unsafe_precondition!(
-1385 | |         check_library_ub,
-1386 | |         "ptr::swap_nonoverlapping requires that both pointer arguments are aligned and non-null \
-1387 | |         and the specified memory ranges do not overlap",
+1400 | /     ub_checks::assert_unsafe_precondition!(
+1401 | |         check_library_ub,
+1402 | |         "ptr::swap_nonoverlapping requires that both pointer arguments are aligned and non-null \
+1403 | |         and the specified memory ranges do not overlap",
 ...    |
-1400 | |     );
+1416 | |     );
      | |_____- in this macro invocation
 note: via `std::ptr::const_ptr::<impl *const ()>::is_aligned_to`
     --> <sysroot>/lib/rustlib/src/rust/library/core/src/ub_checks.rs:141:13
@@ -62,9 +62,9 @@ note: via `std::ptr::const_ptr::<impl *const ()>::is_aligned_to`
  141 |             ptr.is_aligned_to(align)
      |             ^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::rt::panic_fmt`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/panic.rs:62:9
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/panic.rs:61:9
      |
-  62 |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  61 |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      |
     ::: <sysroot>/lib/rustlib/src/rust/library/core/src/ptr/const_ptr.rs:1356:13
@@ -89,9 +89,9 @@ note: via `std::option::Option::<&u32>::unwrap`
   23 |     *values.get(index).unwrap()
      |      ^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::option::unwrap_failed`
-    --> <sysroot>/lib/rustlib/src/rust/library/core/src/option.rs:1014:21
+    --> <sysroot>/lib/rustlib/src/rust/library/core/src/option.rs:1016:21
      |
-1014 |             None => unwrap_failed(),
+1016 |             None => unwrap_failed(),
      |                     ^^^^^^^^^^^^^^^
 
 error: could not compile `strict_host_panic_reject` (build script) due to 3 previous errors

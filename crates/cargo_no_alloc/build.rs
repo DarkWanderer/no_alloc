@@ -23,11 +23,11 @@ fn main() -> anyhow::Result<()> {
         sysroot_path
             .join("lib/rustlib/rustc-src/rust/compiler")
             .is_dir(),
-        "nightly-2026-08-01 is missing the rustc-dev component"
+        "nightly-2026-10-31 is missing the rustc-dev component"
     );
     ensure!(
         sysroot_path.join("lib/rustlib/src/rust/library").is_dir(),
-        "nightly-2026-08-01 is missing the rust-src component"
+        "nightly-2026-10-31 is missing the rust-src component"
     );
     let driver_found = std::fs::read_dir(sysroot_path.join("lib"))?
         .filter_map(Result::ok)
@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
                 .starts_with("librustc_driver-")
         });
     if !driver_found {
-        bail!("nightly-2026-08-01 sysroot does not contain librustc_driver");
+        bail!("nightly-2026-10-31 sysroot does not contain librustc_driver");
     }
 
     println!("cargo::rerun-if-changed=build.rs");

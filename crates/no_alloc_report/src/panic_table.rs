@@ -15,7 +15,7 @@
 //! the intrinsic table, so a root that catches a panic still rejects.
 //!
 //! Each entry asserts one fact about the pinned sysroot
-//! (`nightly-2026-08-01`), checked by reading its source: **every path
+//! (`nightly-2026-10-31`), checked by reading its source: **every path
 //! through this function ends in a panic.** Not "it is `#[cold]`", not "it
 //! returns `!`" — `process::abort`, `process::exit` and
 //! `alloc::alloc::handle_alloc_error` all diverge without being panics, and
@@ -26,7 +26,7 @@
 //! pins that.
 //!
 //! Deliberately absent:
-//! - `std::process::abort`, `std::process::exit`, `core::intrinsics::abort`,
+//! - `std::process::abort`, `std::process::exit`, `core::intrinsics::abort_immediate`,
 //!   `alloc::alloc::handle_alloc_error` — diverging, not panics. The
 //!   allocation-error handler is the clearest case: it is the path an
 //!   allocation *failure* takes, so excusing it would excuse the allocator.
@@ -248,6 +248,7 @@ mod tests {
             "std::process::abort",
             "std::process::exit",
             "core::intrinsics::abort",
+            "core::intrinsics::abort_immediate",
             "core::process::abort_immediate",
             "alloc::alloc::handle_alloc_error",
             "std::alloc::rust_oom",

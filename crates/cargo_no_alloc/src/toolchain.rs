@@ -229,7 +229,7 @@ mod tests {
         let fake_rustc = directory.join("rustc");
         std::fs::write(
             &fake_rustc,
-            "#!/bin/sh\nprintf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+            "#!/bin/sh\nprintf 'release: 1.101.0-nightly\\ncommit-hash: 92b5b8c87\\nhost: x86_64-unknown-linux-gnu\\n'\n",
         )?;
         let mut permissions = std::fs::metadata(&fake_rustc)?.permissions();
         permissions.set_mode(0o755);
@@ -253,7 +253,7 @@ mod tests {
         let fake_rustc = directory.join("rustc");
         std::fs::write(
             &fake_rustc,
-            "#!/bin/sh\nprintf 'release: 1.99.0-nightly\\ncommit-hash: ad3d0bc14\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+            "#!/bin/sh\nprintf 'release: 1.101.0-nightly\\ncommit-hash: 92b5b8c87\\nhost: x86_64-unknown-linux-gnu\\n'\n",
         )?;
         let mut permissions = std::fs::metadata(&fake_rustc)?.permissions();
         permissions.set_mode(0o755);
@@ -291,7 +291,7 @@ mod tests {
 
         let error = verify_pinned_toolchain(&fake_rustc.to_string_lossy())
             .expect_err("mismatched toolchain must be rejected");
-        assert!(error.to_string().contains("nightly-2026-08-01"));
+        assert!(error.to_string().contains("nightly-2026-10-31"));
         std::fs::remove_dir_all(directory)?;
         Ok(())
     }

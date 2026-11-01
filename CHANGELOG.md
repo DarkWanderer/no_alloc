@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
+### Changed
+
+- The pinned toolchain moved from `nightly-2026-08-01` to
+  `nightly-2026-10-31` (rustc 1.101.0-nightly, `92b5b8c87`). Users must
+  reinstall the toolchain:
+  `rustup toolchain install nightly-2026-10-31 --component rustc-dev,rust-src,llvm-tools-preview`.
+  Driver changes for the new compiler internals: `rustc_driver::run_compiler`
+  became `compiler_entrypoint`, `TyCtxt::get_attrs_by_path` became
+  `tool_attrs`, `LangItem` moved to `rustc_attr_ir`, the `FnPtrAddr` shim split
+  into `FnPtrAsPtr` and `FnPtrFromPtr` (both still traversed: their bodies are
+  a single transmute), and rustc no longer provides `ensure_sufficient_stack`,
+  so the traversal now recurses on the compiler thread's own stack.
+- Audited the panic table and the intrinsic table against the new sysroot. No
+  panic-table entry changed. In the intrinsic table, `abort` is now
+  `abort_immediate`, and the float math intrinsics (`sqrt`, `powf`, `floor`,
+  `fma`, ...) are generic and no longer carry a width suffix; only
+  `copysign`, `minimum`, `maximum` and the `*_nsz_` pair still do. The
+  allowlist spellings were updated to match; no intrinsic was added.
+- `examples/iterators` now measures 31 passes, 3 rejections and 1 violation in
+  both default and `--strict` mode (was 33 / 1 / 1): `take_skip`, `zip_dot`
+  and `sort_in_place` reach the new `integer_min` intrinsic behind
+  `Ord::min` for integers, which the intrinsic table has not audited, so it
+  rejects.
+
 ## [0.2.0] - 2026-11-01
 
 ### Breaking

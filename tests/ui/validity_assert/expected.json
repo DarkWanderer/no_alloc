@@ -32,7 +32,7 @@
         "overflow_checks": true,
         "debug_assertions": true,
         "target_triple": "<host>",
-        "rustc_version": "1.99.0-nightly (ad3d0bc14 2026-07-31)",
+        "rustc_version": "1.101.0-nightly (92b5b8c87 2026-10-29)",
         "all_crates": false,
         "build_std": false
       }

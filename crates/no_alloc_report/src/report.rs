@@ -302,7 +302,7 @@ mod tests {
             overflow_checks: false,
             debug_assertions: false,
             target_triple: target_triple.to_string(),
-            rustc_version: "1.99.0-nightly".to_string(),
+            rustc_version: "1.101.0-nightly".to_string(),
             all_crates: false,
             build_std: false,
         }

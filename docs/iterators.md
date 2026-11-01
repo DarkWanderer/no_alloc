@@ -8,7 +8,7 @@ reaches the panic machinery at almost every step.
 This document is the measured answer: what passes, what does not, and why.
 Everything in the tables comes from
 [`examples/iterators`](../examples/iterators), which is 35 `#[no_alloc]`
-roots you can re-run yourself, measured on `nightly-2026-08-01`.
+roots you can re-run yourself, measured on `nightly-2026-10-31`.
 
 ## The short version
 
@@ -28,12 +28,16 @@ lowers to a bare `abort()`, and the walk goes all the way down to it.
 
 | Configuration | Roots passing (of 35) |
 |---|---|
-| default (`panic = "unwind"`) | 33 |
-| default, `[profile.dev] panic = "abort"` | 33 |
-| `--strict` | 33 |
+| default (`panic = "unwind"`) | 31 |
+| default, `[profile.dev] panic = "abort"` | not re-measured on this nightly |
+| `--strict` | 31 |
 
-The other two are a real allocation and a real function pointer, both
-described below, and they are the same two in every configuration.
+The other four are a real allocation, a real function pointer, and three
+roots (`take_skip`, `zip_dot`, `sort_in_place`) that reach
+`intrinsics::integer_min`, an intrinsic added after the previous pinned
+nightly and not yet classified in the intrinsic table, so it rejects
+([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)). They are the
+same four in both measured configurations.
 
 The rows mean different things. A default-mode `Pass` says no allocator is
 reachable except through a panic; a `--strict` `Pass` also says the panic
@@ -59,7 +63,10 @@ entry point (default) or `abort` (`--strict`).
 
 ## What is still rejected
 
-One root rejects, and it earns it: `slice.sort_unstable()`.
+Three roots reject. `take_skip`, `zip_dot` and `sort_in_place` reach
+`<usize as Ord>::min`, which lowers to `intrinsics::integer_min`, a name the
+intrinsic table has not audited. One of them, `slice.sort_unstable()`, would
+reject anyway:
 
 ```
 sort_in_place
@@ -99,7 +106,7 @@ allocating pattern pass.
 - **Verdicts are per-instantiation** ([ADR 0001](../adr/0001-mono-site-analysis.md)).
   `sum::<f32>` passing says nothing about `sum::<MyType>`, whose `Add` impl
   is a different instance.
-- **The tables are pinned to `nightly-2026-08-01`.** They are statements
+- **The tables are pinned to `nightly-2026-10-31`.** They are statements
   about how that toolchain's standard library is written, not about the
   `Iterator` API. A std change to how an adapter is specialized can move a
   pattern from one column to the other; that is what
@@ -113,8 +120,8 @@ allocating pattern pass.
 
 ```bash
 cd examples/iterators
-cargo no-alloc -- build            # 33 pass, 1 reject, 1 violation
-cargo no-alloc --strict -- build   # 33 pass, 1 reject, 1 violation
+cargo no-alloc -- build            # 31 pass, 3 reject, 1 violation
+cargo no-alloc --strict -- build   # 31 pass, 3 reject, 1 violation
 ```
 
 The report each run writes to `target/no-alloc/report.json` is the machine-

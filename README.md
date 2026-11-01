@@ -10,14 +10,14 @@ calls are rejected instead of assumed safe.
 
 ## Install and use
 
-The checker runs on Linux only and needs the `nightly-2026-08-01` toolchain.
+The checker runs on Linux only and needs the `nightly-2026-10-31` toolchain.
 
 Install the marker macro first, then the Cargo command:
 
 ```bash
-cargo add no_alloc_check@0.2.0
-rustup toolchain install nightly-2026-08-01 --component rustc-dev,rust-src
-cargo +nightly-2026-08-01 install cargo-no-alloc --version 0.2.0
+cargo add no_alloc_check@0.3.0
+rustup toolchain install nightly-2026-10-31 --component rustc-dev,rust-src
+cargo +nightly-2026-10-31 install cargo-no-alloc --version 0.3.0
 ```
 
 Mark functions and concrete methods with the stable-compatible attribute:

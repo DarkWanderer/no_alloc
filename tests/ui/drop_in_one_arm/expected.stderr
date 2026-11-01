@@ -1,57 +1,57 @@
 error: no_alloc: this function may reach the global allocator
-    --> src/main.rs:2:1
-     |
-   2 | fn root(take_branch: bool) -> i32 {
-     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-     |
+   --> src/main.rs:2:1
+    |
+  2 | fn root(take_branch: bool) -> i32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
 note: via `root`
-    --> src/main.rs:2:1
-     |
-   2 | fn root(take_branch: bool) -> i32 {
-     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   --> src/main.rs:2:1
+    |
+  2 | fn root(take_branch: bool) -> i32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::vec::Vec::<i32>::push`
-    --> src/main.rs:5:9
-     |
-   5 |         v.push(1);
-     |         ^^^^^^^^^
+   --> src/main.rs:5:9
+    |
+  5 |         v.push(1);
+    |         ^^^^^^^^^
 note: via `std::vec::Vec::<i32>::push_mut`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:996:17
-     |
- 996 |         let _ = self.push_mut(value);
-     |                 ^^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:960:17
+    |
+960 |         let _ = self.push_mut(value);
+    |                 ^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVec::<i32>::grow_one`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:1033:13
-     |
-1033 |             self.buf.grow_one();
-     |             ^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:997:13
+    |
+997 |             self.buf.grow_one();
+    |             ^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::grow_amortized`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:493:36
-     |
- 493 |         if let Err(err) = unsafe { self.grow_amortized(self.cap.as_inner(), 1, elem_layout) } {
-     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:514:36
+    |
+514 |         if let Err(err) = unsafe { self.grow_amortized(self.cap.as_inner(), 1, elem_layout) } {
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `alloc::raw_vec::RawVecInner::finish_grow`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:529:28
-     |
- 529 |         let ptr = unsafe { self.finish_grow(cap, elem_layout)? };
-     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:550:28
+    |
+550 |         let ptr = unsafe { self.finish_grow(cap, elem_layout)? };
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `<std::alloc::Global as std::alloc::Allocator>::allocate`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:560:13
-     |
- 560 |             self.alloc.allocate(new_layout)
-     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:583:13
+    |
+583 |             self.alloc.allocate(new_layout)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::alloc::Global::alloc_impl_runtime`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
-     |
- 418 | /         core::intrinsics::const_eval_select(
- 419 | |             (layout, zeroed),
- 420 | |             Global::alloc_impl_const,
- 421 | |             Global::alloc_impl_runtime,
- 422 | |         )
-     | |_________^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:457:9
+    |
+457 | /         core::intrinsics::const_eval_select(
+458 | |             (layout, zeroed),
+459 | |             Global::alloc_impl_const,
+460 | |             Global::alloc_impl_runtime,
+461 | |         )
+    | |_________^
 note: via `alloc::alloc::__rust_alloc_zeroed`
-    --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
-     |
- 284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
-     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:323:9
+    |
+323 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `drop_in_one_arm` (bin "drop_in_one_arm") due to 1 previous error

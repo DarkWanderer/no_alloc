@@ -10,23 +10,23 @@ note: via `shared_dep::process::<u32>`
   2 | pub fn process<T: Default>() -> usize {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::boxed::box_new_uninit`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:322:33
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/boxed.rs:402:33
     |
-322 |         unsafe { mem::transmute(box_new_uninit(<T as SizedTypeProperties>::LAYOUT)) }
+402 |         unsafe { mem::transmute(box_new_uninit(<T as SizedTypeProperties>::LAYOUT)) }
     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: via `std::alloc::Global::alloc_impl_runtime`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:418:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:457:9
     |
-418 | /         core::intrinsics::const_eval_select(
-419 | |             (layout, zeroed),
-420 | |             Global::alloc_impl_const,
-421 | |             Global::alloc_impl_runtime,
-422 | |         )
+457 | /         core::intrinsics::const_eval_select(
+458 | |             (layout, zeroed),
+459 | |             Global::alloc_impl_const,
+460 | |             Global::alloc_impl_runtime,
+461 | |         )
     | |_________^
 note: via `alloc::alloc::__rust_alloc_zeroed`
-   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:284:9
+   --> <sysroot>/lib/rustlib/src/rust/library/alloc/src/alloc.rs:323:9
     |
-284 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
+323 |         __rust_alloc_zeroed(layout.size(), layout.alignment())
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: could not compile `shared_app` (bin "shared_app") due to 1 previous error
