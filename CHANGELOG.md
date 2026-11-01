@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (what argument-less `panic!()`, `unreachable!()`, `unimplemented!()` and
   `todo!()` now expand to), each of which is a single tail call to
   `core::panicking::panic`, so every path ends in a panic.
+  Fixtures `integer_min_max_intrinsic` and `panic_default_msg_entries` cover
+  them.
 
 ## [0.2.0] - 2026-11-01
 

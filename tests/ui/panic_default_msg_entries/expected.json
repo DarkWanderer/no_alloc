@@ -1,0 +1,82 @@
+{
+  "roots": [
+    {
+      "root": "panic_default_msg_entries::bare_panic",
+      "instance": "bare_panic",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.101.0-nightly (92b5b8c87 2026-10-29)",
+        "all_crates": false,
+        "build_std": false
+      }
+    },
+    {
+      "root": "panic_default_msg_entries::bare_todo",
+      "instance": "bare_todo",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.101.0-nightly (92b5b8c87 2026-10-29)",
+        "all_crates": false,
+        "build_std": false
+      }
+    },
+    {
+      "root": "panic_default_msg_entries::bare_unimplemented",
+      "instance": "bare_unimplemented",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.101.0-nightly (92b5b8c87 2026-10-29)",
+        "all_crates": false,
+        "build_std": false
+      }
+    },
+    {
+      "root": "panic_default_msg_entries::bare_unreachable",
+      "instance": "bare_unreachable",
+      "verdict": {
+        "kind": "pass"
+      },
+      "environment": {
+        "panic_strategy": "unwind",
+        "panic_paths": "out_of_scope",
+        "opt_level": "No",
+        "mir_opt_level": 1,
+        "overflow_checks": true,
+        "debug_assertions": true,
+        "target_triple": "<host>",
+        "rustc_version": "1.101.0-nightly (92b5b8c87 2026-10-29)",
+        "all_crates": false,
+        "build_std": false
+      }
+    }
+  ],
+  "panic_strategy": "unwind",
+  "schema_version": 3
+}
