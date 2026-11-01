@@ -162,6 +162,12 @@ fn is_memory_primitive(name: &str) -> bool {
 
 /// Integer and bit arithmetic — single machine instructions, or the
 /// `llvm.ctlz`/`llvm.ctpop`/... family.
+///
+/// `integer_min` and `integer_max` (behind `Ord::min`/`max` for integers)
+/// are lowered in the same arm as `saturating_add`/`saturating_sub`
+/// (`rustc_codegen_llvm::intrinsic`, rust-lang/rust 92b5b8c87) to a direct
+/// `llvm.umin`/`smin`/`umax`/`smax` call; no Rust code is called. They are
+/// `#[rustc_nounwind]` and their library fallback is a pure comparison.
 fn is_integer_arithmetic(name: &str) -> bool {
     matches!(
         name,
@@ -178,6 +184,8 @@ fn is_integer_arithmetic(name: &str) -> bool {
             | "disjoint_bitor"
             | "exact_div"
             | "float_to_int_unchecked"
+            | "integer_max"
+            | "integer_min"
             | "mul_with_overflow"
             | "rotate_left"
             | "rotate_right"
@@ -371,6 +379,9 @@ mod tests {
     #[test]
     fn the_intrinsics_that_unblock_iterators_are_in_the_table() {
         assert!(intrinsic_cannot_reach_allocator("abort_immediate"));
+        // `Ord::min`/`max` for integers, which iterator adapters use.
+        assert!(intrinsic_cannot_reach_allocator("integer_min"));
+        assert!(intrinsic_cannot_reach_allocator("integer_max"));
         // The pre-rename spelling no longer names an intrinsic.
         assert!(!intrinsic_cannot_reach_allocator("abort"));
         assert!(intrinsic_cannot_reach_allocator("cold_path"));

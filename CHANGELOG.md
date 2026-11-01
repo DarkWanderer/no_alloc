@@ -21,17 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into `FnPtrAsPtr` and `FnPtrFromPtr` (both still traversed: their bodies are
   a single transmute), and rustc no longer provides `ensure_sufficient_stack`,
   so the traversal now recurses on the compiler thread's own stack.
-- Audited the panic table and the intrinsic table against the new sysroot. No
-  panic-table entry changed. In the intrinsic table, `abort` is now
-  `abort_immediate`, and the float math intrinsics (`sqrt`, `powf`, `floor`,
-  `fma`, ...) are generic and no longer carry a width suffix; only
-  `copysign`, `minimum`, `maximum` and the `*_nsz_` pair still do. The
-  allowlist spellings were updated to match; no intrinsic was added.
-- `examples/iterators` now measures 31 passes, 3 rejections and 1 violation in
-  both default and `--strict` mode (was 33 / 1 / 1): `take_skip`, `zip_dot`
-  and `sort_in_place` reach the new `integer_min` intrinsic behind
-  `Ord::min` for integers, which the intrinsic table has not audited, so it
-  rejects.
+- Audited the panic table and the intrinsic table against the new sysroot.
+  `abort` is now `abort_immediate`, and the float math intrinsics (`sqrt`,
+  `powf`, `floor`, `fma`, ...) are generic and no longer carry a width suffix;
+  only `copysign`, `minimum`, `maximum` and the `*_nsz_` pair still do. The
+  allowlist spellings were updated to match.
+- Added on audit of the new sysroot: the intrinsics `integer_min` and
+  `integer_max` (behind `Ord::min`/`max` for integers), which the LLVM backend
+  lowers to a direct `llvm.umin`/`smin`/`umax`/`smax` call, with no Rust code
+  called; and the panic entry points `core::panicking::panic_default_msg`,
+  `unreachable_default_msg`, `unimplemented_default_msg` and `todo_default_msg`
+  (what argument-less `panic!()`, `unreachable!()`, `unimplemented!()` and
+  `todo!()` now expand to), each of which is a single tail call to
+  `core::panicking::panic`, so every path ends in a panic.
 
 ## [0.2.0] - 2026-11-01
 

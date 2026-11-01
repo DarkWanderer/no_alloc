@@ -720,9 +720,6 @@ fn classify_terminator<'tcx>(
     edges
 }
 
-/// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls
-/// when an assertion fails, chosen exactly as it chooses it. Lang items are
-/// non-generic, so codegen calls their `Instance::mono`, and so does this.
 /// rustc removed `rustc_data_structures::stack::ensure_sufficient_stack`
 /// (stack growth) in favour of a fixed, larger thread stack for the compiler
 /// thread, which this analysis runs on. The single call site wrapper is kept so
@@ -731,6 +728,9 @@ fn ensure_sufficient_stack<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// The lang item `codegen_assert_terminator` (`rustc_codegen_ssa`) calls
+/// when an assertion fails, chosen exactly as it chooses it. Lang items are
+/// non-generic, so codegen calls their `Instance::mono`, and so does this.
 fn assert_panic_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     msg: &rustc_middle::mir::AssertMessage<'tcx>,

@@ -28,16 +28,12 @@ lowers to a bare `abort()`, and the walk goes all the way down to it.
 
 | Configuration | Roots passing (of 35) |
 |---|---|
-| default (`panic = "unwind"`) | 31 |
-| default, `[profile.dev] panic = "abort"` | not re-measured on this nightly |
-| `--strict` | 31 |
+| default (`panic = "unwind"`) | 33 |
+| default, `[profile.dev] panic = "abort"` | 33 |
+| `--strict` | 33 |
 
-The other four are a real allocation, a real function pointer, and three
-roots (`take_skip`, `zip_dot`, `sort_in_place`) that reach
-`intrinsics::integer_min`, an intrinsic added after the previous pinned
-nightly and not yet classified in the intrinsic table, so it rejects
-([ADR 0005](../adr/0005-intrinsic-leaf-classification.md)). They are the
-same four in both measured configurations.
+The other two are a real allocation and a real function pointer, both
+described below, and they are the same two in every configuration.
 
 The rows mean different things. A default-mode `Pass` says no allocator is
 reachable except through a panic; a `--strict` `Pass` also says the panic
@@ -63,10 +59,7 @@ entry point (default) or `abort` (`--strict`).
 
 ## What is still rejected
 
-Three roots reject. `take_skip`, `zip_dot` and `sort_in_place` reach
-`<usize as Ord>::min`, which lowers to `intrinsics::integer_min`, a name the
-intrinsic table has not audited. One of them, `slice.sort_unstable()`, would
-reject anyway:
+One root rejects, and it earns it: `slice.sort_unstable()`.
 
 ```
 sort_in_place
@@ -120,8 +113,8 @@ allocating pattern pass.
 
 ```bash
 cd examples/iterators
-cargo no-alloc -- build            # 31 pass, 3 reject, 1 violation
-cargo no-alloc --strict -- build   # 31 pass, 3 reject, 1 violation
+cargo no-alloc -- build            # 33 pass, 1 reject, 1 violation
+cargo no-alloc --strict -- build   # 33 pass, 1 reject, 1 violation
 ```
 
 The report each run writes to `target/no-alloc/report.json` is the machine-

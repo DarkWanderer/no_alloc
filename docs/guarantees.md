@@ -80,10 +80,9 @@ checked with `--strict` still has an allocating panic runtime in its shipped
 binary.
 
 Measured over the 35 iterator patterns in `examples/iterators`, the default
-mode passes 31 under `panic = "unwind"`, and `--strict` passes the same 31;
-the other four are a real allocation, a real function pointer, and three
-roots that reach the not-yet-audited `integer_min` intrinsic — see
-[`iterators.md`](iterators.md).
+mode passes 33 under both `panic = "unwind"` and `panic = "abort"`, and
+`--strict` passes the same 33; the other two are a real allocation and a real
+function pointer — see [`iterators.md`](iterators.md).
 
 **The boundary is MIR, not the machine code.** The analysis follows the
 calls the compiler puts in MIR; it does not see the ones the backend

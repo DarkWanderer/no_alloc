@@ -95,12 +95,23 @@ pub fn is_panic_entry_point(defining_path: &str) -> bool {
 /// for an unwind out of a `nounwind` function (`panic_cannot_unwind`,
 /// `panic_in_cleanup`), and the `assert_eq!`/`assert_matches!` failure
 /// paths. Each is `-> !` and calls only formatting and another entry here.
+///
+/// `panic_default_msg`, `unreachable_default_msg`, `unimplemented_default_msg`
+/// and `todo_default_msg` are what the argument-less `panic!()`,
+/// `unreachable!()`, `unimplemented!()` and `todo!()` expand to as of
+/// `nightly-2026-10-31` (`core/src/panicking.rs`); each body is a single tail
+/// call `panic("...")`, an entry already in this table, so every path ends in
+/// a panic. They have no exported MIR, so without an entry the walk rejects.
 fn is_core_panicking(path: &str) -> bool {
     matches!(
         path,
         "core::panicking::panic_fmt"
             | "core::panicking::panic_nounwind_fmt"
             | "core::panicking::panic"
+            | "core::panicking::panic_default_msg"
+            | "core::panicking::unreachable_default_msg"
+            | "core::panicking::unimplemented_default_msg"
+            | "core::panicking::todo_default_msg"
             | "core::panicking::panic_nounwind"
             | "core::panicking::panic_nounwind_nobacktrace"
             | "core::panicking::panic_display"
@@ -223,6 +234,10 @@ mod tests {
             "core::panicking::panic",
             "core::panicking::panic_nounwind_fmt",
             "core::panicking::panic_bounds_check",
+            "core::panicking::panic_default_msg",
+            "core::panicking::unreachable_default_msg",
+            "core::panicking::unimplemented_default_msg",
+            "core::panicking::todo_default_msg",
             "core::panicking::panic_const::panic_const_add_overflow",
             "core::panicking::panic_const::panic_const_div_by_zero",
             "core::option::unwrap_failed",

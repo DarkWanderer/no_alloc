@@ -5,9 +5,8 @@
 //! cargo no-alloc --strict -- build   # panic paths checked too
 //! ```
 //!
-//! Measured in both modes: 31 of the 35 roots pass, `sort_in_place` is
-//! rejected at a genuine `fn` pointer inside the sort, `take_skip` and
-//! `zip_dot` are rejected at the not-yet-audited `integer_min` intrinsic, and
+//! Measured in both modes: 33 of the 35 roots pass, `sort_in_place` is
+//! rejected at a genuine `fn` pointer inside the sort, and
 //! `collects_into_vec` is reported as a real violation.
 
 use no_alloc_check::no_alloc;
