@@ -6,9 +6,10 @@ The checker and its rustc-internals crates (`rustc_middle`, `rustc_interface`,
 ...) are pinned to `nightly-2026-08-01` in `rust-toolchain.toml`, and the
 tool is Linux-only. **Do not bump the pinned nightly casually** — those
 crates have no stability guarantee across nightlies, and the driver's API
-usage is verified against this exact version. See `AGENTS.md` and
-[ADR 0001](adr/0001-mono-site-analysis.md) for why the analysis is written
-this way in the first place.
+usage is verified against this exact version. See
+[ADR 0001](adr/0001-mono-site-analysis.md) for why the analysis runs on
+rustc's monomorphized instance graph in the first place, and
+[`docs/design.md`](docs/design.md#packages) for the package split.
 
 ```bash
 rustup toolchain install nightly-2026-08-01 --component rustc-dev,rust-src,llvm-tools-preview
@@ -50,6 +51,10 @@ has:
   actual test.
 - `expected.stderr` — a snapshot of compiler/checker stderr, re-blessed with
   `NO_ALLOC_BLESS=1 cargo test ...` rather than hand-edited.
+- optionally `checker-args` (checker flags, one per line) for a case whose
+  subject is a non-default checker configuration, and `checker-env`
+  (`NAME=value` per line) for a case whose subject is a refusal caused by
+  the caller's environment. See the module docs of `tests/ui.rs`.
 
 **Adding an edge-table rule or leaf-set change should come with a new case
 under `tests/ui/`, not just a new assertion bolted onto an existing case.**
@@ -70,6 +75,32 @@ Analysis runs on the monomorphized instance graph
 (`collect_and_partition_mono_items`), not on function definitions — see
 [ADR 0001](adr/0001-mono-site-analysis.md). A verdict is per-instantiation;
 do not memoize or report results by `DefId` alone.
+
+The intrinsic table (`crates/no_alloc_report/src/intrinsic_table.rs`) and
+the panic entry-point table (`crates/no_alloc_report/src/panic_table.rs`)
+are allowlists, and each entry is a soundness claim. Unknown names reject,
+which is the correct default: do not add a name, or "complete a family",
+to make something pass.
+
+- Adding an intrinsic asserts that its lowering cannot call into Rust code.
+  Never add one that runs a caller-supplied function (`catch_unwind`,
+  `const_eval_select`, the contract checks), nor the validity assertions
+  (`assert_inhabited` and friends), which are classified per instantiation
+  in `traversal.rs` — see
+  [ADR 0005](adr/0005-intrinsic-leaf-classification.md).
+- Adding a panic entry point asserts that *every* path through that sysroot
+  function ends in a panic; diverging is not enough (`process::abort`,
+  `process::exit` and `handle_alloc_error` must never be added). Keys are
+  crate-qualified defining paths, not `def_path_str` output. See
+  [ADR 0008](adr/0008-panic-paths-out-of-scope-by-default.md).
+
+## Iterator measurements
+
+The pass/reject counts for `examples/iterators` are stated as measured facts
+in `docs/iterators.md`, `docs/guarantees.md`, `examples/iterators/README.md`
+and `examples/iterators/src/main.rs`. If you change the traversal, re-run the
+example in every configuration `docs/iterators.md` tabulates (the default
+mode and `--strict`) and update all four.
 
 ## Manual verification
 

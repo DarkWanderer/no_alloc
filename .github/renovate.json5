@@ -4,7 +4,7 @@
   packageRules: [
     {
       // The nightly pin is tied to the rustc-internals API the driver uses
-      // (see AGENTS.md), and the MSRV job must build on the declared
+      // (see CONTRIBUTING.md#toolchain), and the MSRV job must build on the declared
       // rust-version, so neither toolchain is a routine dependency bump.
       matchDepNames: ['rust'],
       enabled: false,
