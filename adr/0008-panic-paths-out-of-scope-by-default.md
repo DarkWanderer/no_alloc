@@ -101,8 +101,25 @@ Two alternatives were rejected:
 Everything else is unchanged. An unresolved call still rejects, a `-> !`
 function not in the table is walked or rejected like any other callee
 (`tests/ui/panic_table_unknown_rejects`), and the validity-assertion
-intrinsics and extern-type tail projections, whose codegen emits a panic call
-no MIR edge names, still reject in both modes.
+intrinsics and extern-type tail projections still reject in both modes, for
+the reason in the next subsection.
+
+### Unconditional panics are not carved out (amended 2026-11-01)
+
+The carve-out covers a panic that is one *branch* of an otherwise-executable
+path. It does not cover a construct whose *only* lowering is a panic, and two
+such constructs reject in every mode by design:
+
+- A **failing validity assertion** (`mem::zeroed::<&u8>()` and similar):
+  codegen emits an unconditional `panic_nounwind`, and the program is
+  undefined behaviour on every call that reaches it. The guarantee would hold
+  only vacuously, so a `Pass` would certify a root that cannot run without UB.
+- A **field projection into an extern-type tail**: the tail has no size or
+  alignment, so codegen lowers the projection itself to an unconditional
+  `panic_nounwind` (ADR 0003 for the offset rule).
+
+Neither is a candidate for the panic table or for an out-of-scope
+classification; this is a scope decision, not a pending follow-up.
 
 ## Consequences
 

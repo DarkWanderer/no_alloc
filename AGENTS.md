@@ -14,7 +14,8 @@
   never be added, and neither must the validity assertions
   (`assert_inhabited` and friends), whose codegen emits a panic call for a
   failing instantiation — those are classified per instantiation in
-  `traversal.rs` instead. Unknown names reject, which is the correct default
+  `traversal.rs` instead, and reject in every mode (ADR 0008, "Unconditional
+  panics are not carved out"). Unknown names reject, which is the correct default
   — do not "complete a family" to make something pass.
 - The panic entry-point table (`crates/no_alloc_report/src/panic_table.rs`)
   is an allowlist and a soundness surface like the intrinsic table — see
