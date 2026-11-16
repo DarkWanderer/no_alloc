@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: nightly-2026-10-31
           components: rustc-dev,rust-src,llvm-tools-preview,rustfmt,clippy
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-targets: false
